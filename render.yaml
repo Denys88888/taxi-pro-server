@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: taxi-pro-server
+    runtime: node
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: PI_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000
+    plan: free
