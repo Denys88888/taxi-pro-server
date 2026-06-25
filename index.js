@@ -22,7 +22,8 @@ const {
 
 const PI_API_KEY = process.env.PI_API_KEY || '__PI_API_KEY_REMOVED_ROTATE_IN_PI_PORTAL__';
 const JWT_SECRET = process.env.JWT_SECRET || 'taxi-pro-dev-secret-CHANGE-IN-PRODUCTION';
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 10000;
+const RENDER_URL = process.env.RENDER_URL || `http://localhost:${PORT}`;
 
 initFirebase();
 console.log(`[Server] Firebase: ${isFirebaseEnabled() ? 'ENABLED' : 'DISABLED (in-memory fallback)'}`);
@@ -248,6 +249,17 @@ function requireAuth(req, res, next) {
   }
 }
 
+// Verify the JWT carried on a WebSocket message. Spec requires every WS message
+// (except `auth`/`ping`) to carry a valid jwt. Returns the decoded payload, or
+// null when missing/invalid. When valid, the verified userId is authoritative —
+// callers should prefer it over any client-claimed id to prevent impersonation.
+function verifyWsJwt(msg) {
+  const token = msg.jwt || msg.token;
+  if (!token) return null;
+  try { return jwt.verify(token, JWT_SECRET); }
+  catch { return null; }
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 // Keep-alive endpoint (spec requirement)
@@ -441,6 +453,86 @@ app.get('/api/share/:token', async (req, res) => {
   }
 });
 
+// ─── Spec-canonical aliases ────────────────────────────────────────────────────
+// The spec lists these exact paths (Pi Developer Portal / external callers expect
+// them). They map onto the same logic as the /api/* routes above so the existing
+// frontend keeps working unchanged.
+
+// POST /payments/approve  { paymentId, rideId }
+app.post('/payments/approve', async (req, res) => {
+  try {
+    const { paymentId, rideId } = req.body;
+    if (!paymentId) return res.status(400).json({ error: 'Missing paymentId' });
+    const { status, data } = await piPost(`/v2/payments/${paymentId}/approve`);
+    await storeSavePayment({ paymentId, status: data.status || 'approved', rideId, piResponse: data, updatedAt: new Date().toISOString() });
+    if (rideId) {
+      const ride = await storeGetRide(rideId);
+      if (ride) await storeSaveRide({ ...ride, paymentId, paymentStatus: 'approved' });
+    }
+    res.json({ success: status === 200, paymentId, status: data.status || 'approved', data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /payments/complete  { paymentId, rideId, txid }
+app.post('/payments/complete', async (req, res) => {
+  try {
+    const { paymentId, rideId, txid } = req.body;
+    if (!paymentId || !txid) return res.status(400).json({ error: 'Missing paymentId or txid' });
+    const { status, data } = await piPost(`/v2/payments/${paymentId}/complete`, { txid });
+    await storeSavePayment({ paymentId, status: data.status || 'completed', txid, rideId, piResponse: data, updatedAt: new Date().toISOString() });
+    if (rideId) {
+      const ride = await storeGetRide(rideId);
+      if (ride) await storeSaveRide({ ...ride, paymentId, paymentStatus: 'completed' });
+    }
+    res.json({ success: status === 200, paymentId, txid, status: data.status || 'completed', data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /rides/:id
+app.get('/rides/:id', async (req, res) => {
+  const ride = await storeGetRide(req.params.id);
+  if (!ride) return res.status(404).json({ error: 'Not found' });
+  res.json(ride);
+});
+
+// POST /rides/:id/rate  { fromUserId, toUserId, score, comment }
+app.post('/rides/:id/rate', async (req, res) => {
+  if (!isFirebaseEnabled()) return res.status(503).json({ error: 'Requires Firebase' });
+  const { fromUserId, toUserId, score, comment } = req.body;
+  if (!toUserId || !score) return res.status(400).json({ error: 'Missing toUserId or score' });
+  const rating = {
+    id: 'rating_' + Date.now(),
+    rideId: req.params.id,
+    fromUserId, toUserId,
+    score: Number(score),
+    comment: comment || '',
+    createdAt: new Date().toISOString()
+  };
+  await setDoc('ratings', rating.id, rating);
+
+  const target = await storeGetUser(toUserId);
+  if (target) {
+    const count = (target.totalRatings || 0) + 1;
+    const avg = ((target.rating || 5.0) * (count - 1) + rating.score) / count;
+    await storeSaveUser({ ...target, rating: Math.round(avg * 10) / 10, totalRatings: count });
+  }
+  res.status(201).json(rating);
+});
+
+// GET /promos/:code  → validate
+app.get('/promos/:code', async (req, res) => {
+  if (!isFirebaseEnabled()) return res.status(503).json({ error: 'Requires Firebase' });
+  const promo = await getDoc('promos', req.params.code.toUpperCase());
+  if (!promo || promo.active === false) return res.status(404).json({ error: 'Invalid promo code' });
+  if (promo.expiresAt && new Date(promo.expiresAt) < new Date()) return res.status(400).json({ error: 'Promo expired' });
+  if (promo.maxUses && (promo.usedBy?.length ?? 0) >= promo.maxUses) return res.status(400).json({ error: 'Limit reached' });
+  res.json({ valid: true, code: req.params.code.toUpperCase(), discount: promo.discount, type: promo.type });
+});
+
 // ─── HTTP server ──────────────────────────────────────────────────────────────
 
 const server = http.createServer(app);
@@ -518,8 +610,10 @@ async function handleWsMessage(ws, msg) {
     // ── Driver: online ────────────────────────────────────────────
 
     case 'driver:online': {
+      // Verified JWT identity is authoritative; fall back to claimed id (dev mode).
+      const driverId = verifyWsJwt(msg)?.userId || msg.driverId;
       const driver = {
-        id: msg.driverId,
+        id: driverId,
         name: msg.name,
         carModel: msg.carModel,
         carColor: msg.carColor,
@@ -530,11 +624,11 @@ async function handleWsMessage(ws, msg) {
         onlineAt: new Date().toISOString()
       };
       await storeSaveDriver(driver);
-      ws._driverId = msg.driverId;
+      ws._driverId = driverId;
       ws._driverData = driver;
-      driverClients.set(msg.driverId, ws);
-      broadcast({ type: 'drivers:update', driverId: msg.driverId, location: msg.location, isOnline: true });
-      ws.send(JSON.stringify({ type: 'driver:online:ack', driverId: msg.driverId }));
+      driverClients.set(driverId, ws);
+      broadcast({ type: 'drivers:update', driverId, location: msg.location, isOnline: true });
+      ws.send(JSON.stringify({ type: 'driver:online:ack', driverId }));
       break;
     }
 
@@ -582,6 +676,13 @@ async function handleWsMessage(ws, msg) {
         ws._userId = msg.passengerId;
         userClients.set(msg.passengerId, ws);
       }
+      // Verified JWT identity is authoritative for the passenger.
+      const verifiedPassenger = verifyWsJwt(msg)?.userId;
+      if (verifiedPassenger) {
+        ride.passengerId = verifiedPassenger;
+        ws._userId = verifiedPassenger;
+        userClients.set(verifiedPassenger, ws);
+      }
       await storeSaveRide(ride);
       ws.send(JSON.stringify({ type: 'ride:searching', rideId: ride.id }));
       await startDriverMatching(ride);
@@ -600,8 +701,9 @@ async function handleWsMessage(ws, msg) {
       if (!ride) { ws.send(JSON.stringify({ type: 'error', message: 'Ride not found' })); break; }
       if (ride.status !== 'searching') { ws.send(JSON.stringify({ type: 'error', message: 'Ride no longer available' })); break; }
 
-      const driverInfo = await storeGetDriver(msg.driverId) || { id: msg.driverId };
-      const updated = { ...ride, status: 'accepted', driverId: msg.driverId, acceptedAt: new Date().toISOString() };
+      const acceptingDriverId = verifyWsJwt(msg)?.userId || msg.driverId;
+      const driverInfo = await storeGetDriver(acceptingDriverId) || { id: acceptingDriverId };
+      const updated = { ...ride, status: 'accepted', driverId: acceptingDriverId, acceptedAt: new Date().toISOString() };
       await storeSaveRide(updated);
 
       sendToUser(ride.passengerId, { type: 'ride:accepted', rideId: msg.rideId, driverInfo, status: 'accepted' });
@@ -759,3 +861,12 @@ server.listen(PORT, () => {
   console.log(`[Server] Health: http://localhost:${PORT}/health`);
   console.log(`[Server] WS: ws://localhost:${PORT}`);
 });
+
+// ─── Keep-alive (BUG 4) ─────────────────────────────────────────────────────────
+// Render's free tier sleeps after 15 min of inactivity → cold start loses in-flight
+// state. Self-ping /health every 14 min to stay awake. Node 18+ has global fetch.
+setInterval(() => {
+  fetch(`${RENDER_URL}/health`)
+    .then(() => {})
+    .catch(() => { /* network hiccup — next tick retries */ });
+}, 14 * 60 * 1000);

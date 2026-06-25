@@ -16,7 +16,27 @@ function initFirebase() {
     // Check for service account JSON in env
     const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
     const projectId = process.env.FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY;
     const databaseUrl = process.env.FIREBASE_DATABASE_URL;
+
+    // Preferred (spec): three separate env vars. Render stores the private key with
+    // literal "\n" sequences, so we restore real newlines before passing to the SDK.
+    if (projectId && clientEmail && privateKey) {
+      admin = require('firebase-admin');
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId,
+          clientEmail,
+          privateKey: privateKey.replace(/\\n/g, '\n')
+        }),
+        databaseURL: databaseUrl || undefined
+      });
+      db = admin.firestore();
+      firebaseEnabled = true;
+      console.log('[Firebase] Initialized with project/client/private-key env vars.');
+      return;
+    }
 
     if (serviceAccountJson) {
       const serviceAccount = JSON.parse(serviceAccountJson);
