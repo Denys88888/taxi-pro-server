@@ -4,8 +4,12 @@ services:
     runtime: docker
     plan: free
     envVars:
+      - key: PORT
+        value: 10000
       - key: PI_API_KEY
         sync: false
+      - key: PI_SANDBOX
+        value: true
       - key: JWT_SECRET
         sync: false
       - key: FIREBASE_PROJECT_ID
@@ -14,5 +18,7 @@ services:
         sync: false
       - key: FIREBASE_PRIVATE_KEY
         sync: false
+      - key: CORS_ORIGINS
+        value: https://denys88888.github.io,https://taxi-pro-server.onrender.com
       - key: RENDER_URL
         sync: false
