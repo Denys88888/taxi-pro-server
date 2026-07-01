@@ -10,6 +10,8 @@ import {
   updateRide,
   cancelRide,
   shareRide,
+  submitOffer,
+  acceptOffer,
 } from '../controllers/rideController';
 
 const router = Router();
@@ -25,7 +27,17 @@ const createSchema = z.object({
   pickup: geoSchema,
   destination: geoSchema,
   vehicleType: vehicleSchema,
+  stops: z.array(geoSchema).max(5).optional(),
+  scheduledAt: z.string().datetime().optional(),
+  negotiable: z.boolean().optional(),
+  offeredFare: z.number().positive().max(10000).optional(),
 });
+
+const offerSchema = z.object({
+  amount: z.number().positive().max(10000),
+  etaMin: z.number().int().min(0).max(120).optional(),
+});
+const acceptOfferSchema = z.object({ driverId: z.string().min(1) });
 
 const updateSchema = z
   .object({
@@ -53,5 +65,7 @@ router.get('/:id', asyncHandler(getRide));
 router.patch('/:id', validate(updateSchema), asyncHandler(updateRide));
 router.post('/:id/cancel', validate(cancelSchema), asyncHandler(cancelRide));
 router.post('/:id/share', asyncHandler(shareRide));
+router.post('/:id/offers', validate(offerSchema), asyncHandler(submitOffer));
+router.post('/:id/offers/accept', validate(acceptOfferSchema), asyncHandler(acceptOffer));
 
 export default router;

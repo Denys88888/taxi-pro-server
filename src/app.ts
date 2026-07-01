@@ -12,6 +12,7 @@ import messageRoutes from './routes/messages';
 import paymentRoutes from './routes/payments';
 import adminRoutes from './routes/admin';
 import pushRoutes from './routes/push';
+import userRoutes from './routes/users';
 
 // Build the Express application. Exported separately from the HTTP/WS server so
 // integration tests can exercise it with supertest without opening a socket.
@@ -42,6 +43,7 @@ export function createApp(): Express {
 
   // Feature routers.
   app.use('/api/auth', authRoutes);
+  app.use('/api/users', userRoutes);
   app.use('/api/rides', rideRoutes);
   app.use('/api/drivers', driverRoutes);
   app.use('/api/messages', messageRoutes);

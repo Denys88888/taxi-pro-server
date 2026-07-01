@@ -1,23 +1,29 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
 import { calculateFare, estimateDurationMin } from '../services/fareCalculator';
-import { haversineKm, genId, nowIso, round } from '../utils/helpers';
+import { routeDistanceKm, genId, nowIso, round } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
 import { LATE_CANCELLATION_FEE_PERCENT } from '../config/constants';
 import { sendToUser, broadcast } from '../websocket/broadcast';
-import type { Ride, GeoPoint, VehicleType, RideStatus } from '../types';
+import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty } from '../types';
 
 // POST /api/rides — create a ride request (server computes distance + fare).
+// Supports multi-stop, scheduled (future dispatch) and negotiable (inDriver) rides.
 export async function createRide(req: Request, res: Response): Promise<void> {
-  const { pickup, destination, vehicleType } = req.body as {
-    pickup: GeoPoint;
-    destination: GeoPoint;
-    vehicleType: VehicleType;
-  };
+  const { pickup, destination, vehicleType, stops, scheduledAt, negotiable, offeredFare } =
+    req.body as {
+      pickup: GeoPoint;
+      destination: GeoPoint;
+      vehicleType: VehicleType;
+      stops?: GeoPoint[];
+      scheduledAt?: string;
+      negotiable?: boolean;
+      offeredFare?: number;
+    };
   const settings = await store().getSettings();
-  const distanceKm = round(
-    haversineKm(pickup.lat, pickup.lng, destination.lat, destination.lng)
-  );
+  // Distance follows the full path: pickup → stops… → destination.
+  const path = [pickup, ...(stops ?? []), destination];
+  const distanceKm = round(routeDistanceKm(path));
   const durationMin = estimateDurationMin(distanceKm);
   const breakdown = calculateFare({
     vehicleType,
@@ -25,22 +31,54 @@ export async function createRide(req: Request, res: Response): Promise<void> {
     durationMin,
     platformFeePercent: settings.platformFeePercent,
   });
+
+  // A negotiable ride uses the passenger's asking price as the working fare.
+  const fareBase =
+    negotiable && offeredFare && offeredFare > 0
+      ? { ...breakdown, fare: round(offeredFare), platformFee: round((offeredFare * breakdown.platformFeePercent) / 100), driverEarnings: round(offeredFare - (offeredFare * breakdown.platformFeePercent) / 100) }
+      : breakdown;
+
+  // Future-dated rides wait as 'scheduled'; the dispatcher promotes them when due.
+  const isScheduled = !!scheduledAt && new Date(scheduledAt).getTime() > Date.now();
+
   const ride: Ride = {
     id: genId('ride'),
     passengerId: req.user!.uid,
     pickup,
     destination,
+    ...(stops && stops.length ? { stops } : {}),
     vehicleType,
     distanceKm,
     estimatedDurationMin: durationMin,
-    ...breakdown,
-    status: 'searching',
+    ...fareBase,
+    status: isScheduled ? 'scheduled' : 'searching',
+    ...(scheduledAt ? { scheduledAt } : {}),
+    ...(negotiable ? { negotiable: true, offeredFare: round(offeredFare ?? breakdown.fare), offers: [] } : {}),
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
   await store().saveRide(ride);
-  broadcast({ type: 'ride_available', ride }, 'driver');
+  // Immediate rides are offered to drivers now; scheduled ones dispatch later.
+  if (!isScheduled) broadcast({ type: 'ride_available', ride }, 'driver');
   res.status(201).json(ride);
+}
+
+// Build a public-safe party view from a user, honoring the caller's visibility.
+async function partyFromUser(uid: string): Promise<RideParty | null> {
+  const u = await store().getUser(uid);
+  if (!u) return null;
+  return {
+    uid: u.uid,
+    name: u.name,
+    phone: u.phone,
+    rating: u.rating,
+    avatar: u.avatar,
+    vehicleType: u.driverInfo?.vehicleType,
+    brand: u.driverInfo?.brand,
+    model: u.driverInfo?.model,
+    color: u.driverInfo?.color,
+    number: u.driverInfo?.number,
+  };
 }
 
 // GET /api/rides?status=&page=&limit= — the caller's rides.
@@ -64,7 +102,79 @@ export async function getRide(req: Request, res: Response): Promise<void> {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
-  res.json(ride);
+
+  // Attach the counterpart's contact card once the relationship is established:
+  // the passenger sees the driver after assignment; the driver sees the
+  // passenger after accepting. Phone numbers are only shared at that point.
+  const assigned = ['assigned', 'arrived', 'in_progress', 'completed'].includes(ride.status);
+  let driver: RideParty | null = null;
+  let passenger: RideParty | null = null;
+  if (assigned && ride.driverId) driver = await partyFromUser(ride.driverId);
+  if (assigned && ride.driverId === uid) passenger = await partyFromUser(ride.passengerId);
+
+  res.json({ ...ride, driver, passenger });
+}
+
+// POST /api/rides/:id/offers — a driver bids a price on a negotiable ride.
+export async function submitOffer(req: Request, res: Response): Promise<void> {
+  const { amount, etaMin } = req.body as { amount: number; etaMin?: number };
+  const ride = await store().getRide(req.params.id);
+  if (!ride) {
+    res.status(404).json({ error: 'Ride not found' });
+    return;
+  }
+  if (!ride.negotiable || ride.status !== 'searching') {
+    res.status(409).json({ error: 'Ride is not open for offers' });
+    return;
+  }
+  const driver = await store().getUser(req.user!.uid);
+  const offers = (ride.offers ?? []).filter((o) => o.driverId !== req.user!.uid);
+  offers.push({
+    driverId: req.user!.uid,
+    driverName: driver?.name ?? 'Driver',
+    driverRating: driver?.rating ?? 5,
+    vehicleType: driver?.driverInfo?.vehicleType,
+    amount: round(amount),
+    etaMin,
+    createdAt: nowIso(),
+  });
+  const updated = await store().updateRide(ride.id, { offers });
+  // Push the refreshed offer list to the passenger in real time.
+  sendToUser(ride.passengerId, { type: 'fare_offers', rideId: ride.id, offers });
+  res.status(201).json(updated);
+}
+
+// POST /api/rides/:id/offers/accept — passenger picks a driver's offer.
+export async function acceptOffer(req: Request, res: Response): Promise<void> {
+  const { driverId } = req.body as { driverId: string };
+  const ride = await store().getRide(req.params.id);
+  if (!ride) {
+    res.status(404).json({ error: 'Ride not found' });
+    return;
+  }
+  if (ride.passengerId !== req.user!.uid) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  const offer = ride.offers?.find((o) => o.driverId === driverId);
+  if (!offer) {
+    res.status(404).json({ error: 'Offer not found' });
+    return;
+  }
+  const settings = await store().getSettings();
+  const platformFee = round((offer.amount * settings.platformFeePercent) / 100);
+  const updated = await store().updateRide(ride.id, {
+    status: 'assigned',
+    driverId,
+    fare: offer.amount,
+    platformFeePercent: settings.platformFeePercent,
+    platformFee,
+    driverEarnings: round(offer.amount - platformFee),
+  });
+  const driver = await partyFromUser(driverId);
+  sendToUser(driverId, { type: 'ride_assigned', rideId: ride.id, driverId, driverInfo: driver });
+  broadcast({ type: 'ride_status_update', rideId: ride.id, status: 'assigned', data: {} }, 'driver');
+  res.json(updated);
 }
 
 // PATCH /api/rides/:id — update status / ratings (participants only).

@@ -5,12 +5,24 @@ export type Role = 'passenger' | 'driver' | 'admin';
 export type VehicleType = 'economy' | 'comfort' | 'business' | 'xl';
 
 export type RideStatus =
+  | 'scheduled'
   | 'searching'
   | 'assigned'
   | 'arrived'
   | 'in_progress'
   | 'completed'
   | 'cancelled';
+
+// A driver's price bid on a negotiable (inDriver-style) ride request.
+export interface FareOffer {
+  driverId: string;
+  driverName: string;
+  driverRating: number;
+  vehicleType?: VehicleType;
+  amount: number;
+  etaMin?: number;
+  createdAt: string;
+}
 
 export type PaymentStatus =
   | 'created'
@@ -63,6 +75,8 @@ export interface Ride {
   driverId?: string;
   pickup: GeoPoint;
   destination: GeoPoint;
+  // Optional intermediate stops (multi-stop rides), in visiting order.
+  stops?: GeoPoint[];
   vehicleType: VehicleType;
   distanceKm: number;
   estimatedDurationMin: number;
@@ -71,6 +85,12 @@ export interface Ride {
   platformFee: number;
   driverEarnings: number;
   status: RideStatus;
+  // Scheduled rides: ISO time the ride should be dispatched. Absent = immediate.
+  scheduledAt?: string;
+  // inDriver-style negotiation: passenger's asking price + collected driver bids.
+  negotiable?: boolean;
+  offeredFare?: number;
+  offers?: FareOffer[];
   paymentId?: string;
   txid?: string;
   passengerRating?: number;
@@ -83,6 +103,21 @@ export interface Ride {
   shareToken?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// Public-safe view of a ride counterpart, exposed per visibility rules
+// (passenger sees driver after assignment; driver sees passenger after accept).
+export interface RideParty {
+  uid: string;
+  name: string;
+  phone?: string;
+  rating: number;
+  avatar?: string;
+  vehicleType?: VehicleType;
+  brand?: string;
+  model?: string;
+  color?: string;
+  number?: string;
 }
 
 export interface Message {

@@ -4,6 +4,7 @@ import { logger } from './utils/logger';
 import { initStore } from './models';
 import { createApp } from './app';
 import { initWebSocket } from './websocket/server';
+import { startScheduler } from './services/scheduler';
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────────
 initStore();
@@ -11,6 +12,7 @@ initStore();
 const app = createApp();
 const server = http.createServer(app);
 initWebSocket(server);
+startScheduler();
 
 server.listen(env.PORT, () => {
   logger.info(`[Server] Taxi Pro API listening on :${env.PORT}`, {
