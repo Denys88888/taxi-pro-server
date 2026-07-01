@@ -173,6 +173,8 @@ export async function acceptOffer(req: Request, res: Response): Promise<void> {
   });
   const driver = await partyFromUser(driverId);
   sendToUser(driverId, { type: 'ride_assigned', rideId: ride.id, driverId, driverInfo: driver });
+  // Notify the passenger too so their tracking screen refreshes with the driver.
+  sendToUser(ride.passengerId, { type: 'ride_status_update', rideId: ride.id, status: 'assigned', data: {} });
   broadcast({ type: 'ride_status_update', rideId: ride.id, status: 'assigned', data: {} }, 'driver');
   res.json(updated);
 }
