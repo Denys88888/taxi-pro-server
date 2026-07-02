@@ -19,7 +19,7 @@ services:
       - key: FIREBASE_PRIVATE_KEY
         sync: false
       - key: CORS_ORIGINS
-        value: https://denys88888.github.io,https://taxi-pro-server.onrender.com
+        value: https://denys88888.github.io
       - key: RENDER_URL
         sync: false
       # SQLite DB path. For cross-deploy persistence, attach a Render disk mounted

@@ -20,9 +20,7 @@ const schema = z.object({
   FIREBASE_PROJECT_ID: z.string().optional(),
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
-  CORS_ORIGINS: z
-    .string()
-    .default('https://denys88888.github.io,https://taxi-pro-server.onrender.com'),
+  CORS_ORIGINS: z.string().default('https://denys88888.github.io'),
   RENDER_URL: z.string().optional(),
   // Path to the SQLite database file (primary durable store). ':memory:' for tests.
   SQLITE_PATH: z.string().optional(),

@@ -20,10 +20,21 @@ import reportRoutes from './routes/reports';
 export function createApp(): Express {
   const app = express();
 
-  // Security headers, incl. HSTS (HTTPS-only enforcement at the edge).
+  // Security headers, incl. HSTS (HTTPS-only enforcement at the edge) and a
+  // strict Content-Security-Policy. This is a JSON API that serves no HTML or
+  // scripts, so everything is locked down to 'none'.
   app.use(
     helmet({
       hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          defaultSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+          baseUri: ["'none'"],
+          formAction: ["'none'"],
+        },
+      },
     })
   );
   app.use(corsMiddleware);
