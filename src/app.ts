@@ -13,6 +13,7 @@ import paymentRoutes from './routes/payments';
 import adminRoutes from './routes/admin';
 import pushRoutes from './routes/push';
 import userRoutes from './routes/users';
+import reportRoutes from './routes/reports';
 
 // Build the Express application. Exported separately from the HTTP/WS server so
 // integration tests can exercise it with supertest without opening a socket.
@@ -49,6 +50,7 @@ export function createApp(): Express {
   app.use('/api/messages', messageRoutes);
   app.use('/api/payments', paymentRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/reports', reportRoutes);
   app.use('/api/push-token', pushRoutes);
 
   app.use(notFound);

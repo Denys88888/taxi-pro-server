@@ -25,7 +25,9 @@ export function errorHandler(
   } else {
     logger.warn('[Error]', { message: err.message, status });
   }
+  // Only mask truly unexpected 500s. Explicit operational errors (e.g. 503 when
+  // the Pi API key isn't configured) keep their message so clients can react.
   res.status(status).json({
-    error: status >= 500 ? 'Internal server error' : err.message,
+    error: status === 500 ? 'Internal server error' : err.message,
   });
 }

@@ -121,3 +121,32 @@ describe('phone visibility on assigned ride', () => {
     expect(after.body.driver?.phone).toBe('+15559990000');
   });
 });
+
+describe('reports (complaints)', () => {
+  it('lets a ride participant file a report; a stranger cannot', async () => {
+    const created = await request(app)
+      .post('/api/rides')
+      .set(authFor('rp-pass'))
+      .send({ pickup, destination, vehicleType: 'economy' });
+    const rideId = created.body.id;
+
+    const ok = await request(app)
+      .post('/api/reports')
+      .set(authFor('rp-pass'))
+      .send({ rideId, reportedId: 'someone', reason: 'rude', description: 'test' });
+    expect(ok.status).toBe(201);
+    expect(ok.body.status).toBe('open');
+
+    const stranger = await request(app)
+      .post('/api/reports')
+      .set(authFor('rp-stranger'))
+      .send({ rideId, reportedId: 'x', reason: 'x' });
+    expect(stranger.status).toBe(403);
+
+    // Admin sees and resolves it.
+    const list = await request(app)
+      .get('/api/admin/reports?status=open')
+      .set({ Authorization: `Bearer ${signToken({ uid: 'rp-admin', role: 'admin' })}` });
+    expect(list.body.reports.some((r: { id: string }) => r.id === ok.body.id)).toBe(true);
+  });
+});
