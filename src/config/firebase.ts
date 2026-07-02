@@ -14,7 +14,7 @@ export function initFirebase(): boolean {
 
   const { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY } = env;
   if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
-    logger.warn('[Firebase] Not configured — using in-memory store.');
+    logger.info('[Firebase] Not configured (optional) — using the local SQLite store.');
     return false;
   }
 

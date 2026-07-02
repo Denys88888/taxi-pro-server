@@ -1,3 +1,4 @@
+import fetch from 'cross-fetch';
 import { env } from '../config/env';
 import { PI_API_HOST } from '../config/constants';
 import { logger } from '../utils/logger';

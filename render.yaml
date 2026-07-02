@@ -22,3 +22,11 @@ services:
         value: https://denys88888.github.io,https://taxi-pro-server.onrender.com
       - key: RENDER_URL
         sync: false
+      # SQLite DB path. For cross-deploy persistence, attach a Render disk mounted
+      # at /app/data (see the `disk` block below — requires a paid plan).
+      - key: SQLITE_PATH
+        value: /app/data/taxipro.db
+    # disk:
+    #   name: taxipro-data
+    #   mountPath: /app/data
+    #   sizeGB: 1

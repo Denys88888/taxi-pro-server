@@ -24,6 +24,8 @@ const schema = z.object({
     .string()
     .default('https://denys88888.github.io,https://taxi-pro-server.onrender.com'),
   RENDER_URL: z.string().optional(),
+  // Path to the SQLite database file (primary durable store). ':memory:' for tests.
+  SQLITE_PATH: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
