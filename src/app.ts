@@ -2,6 +2,7 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import { env } from './config/env';
 import { isFirebaseEnabled } from './config/firebase';
+import { storeKind } from './models';
 import { corsMiddleware } from './middleware/cors';
 import { apiLimiter } from './middleware/rateLimit';
 import { notFound, errorHandler } from './middleware/errorHandler';
@@ -46,6 +47,7 @@ export function createApp(): Express {
       status: 'ok',
       sandbox: env.PI_SANDBOX,
       firebase: isFirebaseEnabled(),
+      store: storeKind(),
       time: new Date().toISOString(),
     });
   });

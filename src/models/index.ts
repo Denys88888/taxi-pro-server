@@ -11,12 +11,20 @@ import { SqliteStore } from './sqlite';
 //   1. Firestore  — when Firebase env vars are configured (optional cloud DB)
 //   2. SQLite     — primary durable store (WAL), the default
 //   3. In-memory  — last-resort fallback if SQLite fails to open
+// Which backend ended up active, for the /api/health report.
+export type StoreKind = 'firestore' | 'sqlite' | 'memory';
+let activeStore: StoreKind = 'memory';
+export function storeKind(): StoreKind {
+  return activeStore;
+}
+
 // Returns whether a durable store (Firestore or SQLite) is active.
 export function initStore(): boolean {
   // Optional Firestore, enabled only via env.
   const firebaseOk = initFirebase();
   if (firebaseOk && isFirebaseEnabled()) {
     setStore(new FirestoreStore());
+    activeStore = 'firestore';
     logger.info('[Store] Using Firestore (durable, cloud).');
     return true;
   }
@@ -26,6 +34,7 @@ export function initStore(): boolean {
     const dbPath =
       env.SQLITE_PATH ?? path.join(process.cwd(), 'data', 'taxipro.db');
     setStore(new SqliteStore(dbPath));
+    activeStore = 'sqlite';
     logger.info('[Store] Using SQLite (durable, WAL).', { path: dbPath });
     return true;
   } catch (err) {
@@ -35,6 +44,7 @@ export function initStore(): boolean {
   }
 
   setStore(new MemoryStore());
+  activeStore = 'memory';
   logger.warn('[Store] Using in-memory store (non-durable fallback).');
   return false;
 }
