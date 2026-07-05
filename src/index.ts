@@ -1,12 +1,14 @@
 import http from 'http';
 import { env } from './config/env';
 import { logger } from './utils/logger';
+import { initSentry } from './utils/sentry';
 import { initStore } from './models';
 import { createApp } from './app';
 import { initWebSocket } from './websocket/server';
 import { startScheduler } from './services/scheduler';
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────────
+initSentry();
 initStore();
 
 const app = createApp();

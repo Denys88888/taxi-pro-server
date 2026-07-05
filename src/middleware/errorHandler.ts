@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
+import { captureException } from '../utils/sentry';
 
 interface HttpError extends Error {
   statusCode?: number;
@@ -22,6 +23,7 @@ export function errorHandler(
   const status = err.statusCode ?? 500;
   if (status >= 500) {
     logger.error('[Error]', { message: err.message, stack: err.stack });
+    captureException(err);
   } else {
     logger.warn('[Error]', { message: err.message, status });
   }
