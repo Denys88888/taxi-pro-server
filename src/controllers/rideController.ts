@@ -90,6 +90,24 @@ export async function getSurgeInfo(req: Request, res: Response): Promise<void> {
   res.json(await getSurge(point));
 }
 
+// GET /api/rides/open — open requests for drivers coming online: 'searching'
+// rides from the last 30 minutes, so requests created before the driver
+// connected are not lost (the live 'ride_available' WS event only reaches
+// drivers connected at creation time).
+export async function listOpenRides(req: Request, res: Response): Promise<void> {
+  const since = Date.now() - 30 * 60 * 1000;
+  const searching = await store().listAllRides('searching');
+  const rides = searching
+    .filter(
+      (r) =>
+        r.passengerId !== req.user!.uid &&
+        new Date(r.createdAt).getTime() >= since &&
+        (!r.scheduledAt || new Date(r.scheduledAt).getTime() <= Date.now())
+    )
+    .slice(0, 20);
+  res.json({ rides });
+}
+
 // GET /api/rides/heatmap — demand hotspots for drivers: pickups of rides that
 // went unserved (still searching or cancelled) in the last 30 minutes, grouped
 // into ~1 km cells with a weight per cell.

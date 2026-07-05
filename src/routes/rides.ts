@@ -15,6 +15,7 @@ import {
   acceptOffer,
   getSurgeInfo,
   getHeatmap,
+  listOpenRides,
 } from '../controllers/rideController';
 
 const router = Router();
@@ -66,6 +67,7 @@ router.post('/', rideCreateLimiter, validate(createSchema), asyncHandler(createR
 router.get('/', asyncHandler(listRides));
 // Static paths must precede '/:id'.
 router.get('/surge', asyncHandler(getSurgeInfo));
+router.get('/open', asyncHandler(listOpenRides));
 router.get('/heatmap', asyncHandler(getHeatmap));
 router.get('/:id', asyncHandler(getRide));
 router.patch('/:id', validate(updateSchema), asyncHandler(updateRide));
