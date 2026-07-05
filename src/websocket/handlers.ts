@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { store } from '../models';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/fcmService';
-import { calculateFare, estimateDurationMin } from '../services/fareCalculator';
-import { haversineKm, genId, nowIso } from '../utils/helpers';
+import { calculateFare } from '../services/fareCalculator';
+import { getRouteInfo } from '../services/routingService';
+import { genId, nowIso } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, type AuthedSocket } from './broadcast';
 import type { Ride, GeoPoint } from '../types';
@@ -80,13 +81,8 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       const destination = geo.parse(msg.destination) as GeoPoint;
       const v = vehicle.parse(msg.vehicleType);
       const settings = await store().getSettings();
-      const distanceKm = haversineKm(
-        pickup.lat,
-        pickup.lng,
-        destination.lat,
-        destination.lng
-      );
-      const durationMin = estimateDurationMin(distanceKm);
+      // Real road distance/duration (haversine only as offline fallback).
+      const { distanceKm, durationMin } = await getRouteInfo([pickup, destination]);
       const breakdown = calculateFare({
         vehicleType: v,
         distanceKm,

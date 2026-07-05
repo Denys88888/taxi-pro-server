@@ -1,7 +1,8 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
-import { calculateFare, estimateDurationMin } from '../services/fareCalculator';
-import { routeDistanceKm, genId, nowIso, round } from '../utils/helpers';
+import { calculateFare } from '../services/fareCalculator';
+import { getRouteInfo } from '../services/routingService';
+import { genId, nowIso, round } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
 import { LATE_CANCELLATION_FEE_PERCENT } from '../config/constants';
 import { sendToUser, broadcast } from '../websocket/broadcast';
@@ -21,10 +22,12 @@ export async function createRide(req: Request, res: Response): Promise<void> {
       offeredFare?: number;
     };
   const settings = await store().getSettings();
-  // Distance follows the full path: pickup → stops… → destination.
+  // Distance follows the full path (pickup → stops… → destination) along the
+  // road network; haversine is only the offline fallback inside getRouteInfo.
   const path = [pickup, ...(stops ?? []), destination];
-  const distanceKm = round(routeDistanceKm(path));
-  const durationMin = estimateDurationMin(distanceKm);
+  const routeInfo = await getRouteInfo(path);
+  const distanceKm = round(routeInfo.distanceKm);
+  const durationMin = routeInfo.durationMin;
   const breakdown = calculateFare({
     vehicleType,
     distanceKm,
