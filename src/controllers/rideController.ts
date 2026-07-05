@@ -2,6 +2,8 @@ import type { Request, Response } from 'express';
 import { store } from '../models';
 import { calculateFare } from '../services/fareCalculator';
 import { getRouteInfo } from '../services/routingService';
+import { getSurge } from '../services/surgeService';
+import { releaseHeldPayment } from './paymentController';
 import { genId, nowIso, round } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
 import { LATE_CANCELLATION_FEE_PERCENT } from '../config/constants';
@@ -25,14 +27,20 @@ export async function createRide(req: Request, res: Response): Promise<void> {
   // Distance follows the full path (pickup → stops… → destination) along the
   // road network; haversine is only the offline fallback inside getRouteInfo.
   const path = [pickup, ...(stops ?? []), destination];
-  const routeInfo = await getRouteInfo(path);
+  const [routeInfo, surge] = await Promise.all([
+    getRouteInfo(path),
+    settings.surgeEnabled !== false ? getSurge(pickup) : Promise.resolve({ multiplier: 1, reason: 'normal' as const }),
+  ]);
   const distanceKm = round(routeInfo.distanceKm);
   const durationMin = routeInfo.durationMin;
   const breakdown = calculateFare({
     vehicleType,
     distanceKm,
     durationMin,
+    surge: surge.multiplier,
     platformFeePercent: settings.platformFeePercent,
+    minFare: settings.minFare,
+    baseFarePerKm: settings.baseFarePerKm,
   });
 
   // A negotiable ride uses the passenger's asking price as the working fare.
@@ -54,6 +62,8 @@ export async function createRide(req: Request, res: Response): Promise<void> {
     distanceKm,
     estimatedDurationMin: durationMin,
     ...fareBase,
+    surgeMultiplier: surge.multiplier,
+    paymentStatus: 'pending',
     status: isScheduled ? 'scheduled' : 'searching',
     ...(scheduledAt ? { scheduledAt } : {}),
     ...(negotiable ? { negotiable: true, offeredFare: round(offeredFare ?? breakdown.fare), offers: [] } : {}),
@@ -64,6 +74,42 @@ export async function createRide(req: Request, res: Response): Promise<void> {
   // Immediate rides are offered to drivers now; scheduled ones dispatch later.
   if (!isScheduled) broadcast({ type: 'ride_available', ride }, 'driver');
   res.status(201).json(ride);
+}
+
+// GET /api/rides/surge?lat=&lng= — current surge multiplier at a point (or
+// time-only if no coords). Shown to the passenger before ordering.
+export async function getSurgeInfo(req: Request, res: Response): Promise<void> {
+  const settings = await store().getSettings();
+  if (settings.surgeEnabled === false) {
+    res.json({ multiplier: 1, reason: 'normal' });
+    return;
+  }
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  const point = Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined;
+  res.json(await getSurge(point));
+}
+
+// GET /api/rides/heatmap — demand hotspots for drivers: pickups of rides that
+// went unserved (still searching or cancelled) in the last 30 minutes, grouped
+// into ~1 km cells with a weight per cell.
+export async function getHeatmap(_req: Request, res: Response): Promise<void> {
+  const since = Date.now() - 30 * 60 * 1000;
+  const [searching, cancelled] = await Promise.all([
+    store().listAllRides('searching'),
+    store().listAllRides('cancelled'),
+  ]);
+  const cells = new Map<string, { lat: number; lng: number; weight: number }>();
+  for (const ride of [...searching, ...cancelled]) {
+    if (new Date(ride.createdAt).getTime() < since) continue;
+    const lat = Math.round(ride.pickup.lat * 100) / 100;
+    const lng = Math.round(ride.pickup.lng * 100) / 100;
+    const key = `${lat},${lng}`;
+    const cell = cells.get(key) ?? { lat, lng, weight: 0 };
+    cell.weight += 1;
+    cells.set(key, cell);
+  }
+  res.json({ points: [...cells.values()] });
 }
 
 // Build a public-safe party view from a user, honoring the caller's visibility.
@@ -248,11 +294,17 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
   const cancellationFee = feeApplies
     ? round((ride.fare * LATE_CANCELLATION_FEE_PERCENT) / 100)
     : 0;
+  // Escrow: a held (approved, not completed) Pi payment is released back.
+  const paymentStatus = ride.paymentStatus === 'held' ? 'refunded' : ride.paymentStatus;
+  if (ride.paymentStatus === 'held' && ride.paymentId) {
+    await releaseHeldPayment(ride.paymentId);
+  }
   const updated = await store().updateRide(req.params.id, {
     status: 'cancelled',
     cancelledBy: req.user!.role,
     cancellationReason: String(req.body.reason),
     cancellationFee,
+    ...(paymentStatus ? { paymentStatus } : {}),
   });
   const payload = {
     type: 'ride_status_update',

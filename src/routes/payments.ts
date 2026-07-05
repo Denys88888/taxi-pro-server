@@ -12,7 +12,11 @@ import {
 
 const router = Router();
 
-const createSchema = z.object({ rideId: z.string().min(1) });
+const createSchema = z.object({
+  rideId: z.string().min(1),
+  type: z.enum(['ride', 'tip']).optional(),
+  amount: z.number().positive().max(100).optional(),
+});
 const approveSchema = z.object({ piPaymentId: z.string().min(1) });
 const completeSchema = z.object({
   piPaymentId: z.string().min(1),

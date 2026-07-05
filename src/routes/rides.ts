@@ -12,6 +12,8 @@ import {
   shareRide,
   submitOffer,
   acceptOffer,
+  getSurgeInfo,
+  getHeatmap,
 } from '../controllers/rideController';
 
 const router = Router();
@@ -61,6 +63,9 @@ router.use(requireAuth);
 
 router.post('/', validate(createSchema), asyncHandler(createRide));
 router.get('/', asyncHandler(listRides));
+// Static paths must precede '/:id'.
+router.get('/surge', asyncHandler(getSurgeInfo));
+router.get('/heatmap', asyncHandler(getHeatmap));
 router.get('/:id', asyncHandler(getRide));
 router.patch('/:id', validate(updateSchema), asyncHandler(updateRide));
 router.post('/:id/cancel', validate(cancelSchema), asyncHandler(cancelRide));

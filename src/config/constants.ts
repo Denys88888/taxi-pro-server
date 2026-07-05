@@ -29,6 +29,9 @@ export const LATE_CANCELLATION_FEE_PERCENT = 50;
 // Global defaults, overridable by admins via the settings doc.
 export const DEFAULT_SETTINGS: Settings = {
   platformFeePercent: 10,
+  surgeEnabled: true,
+  minFare: FARE_TABLE.economy.minFare,
+  baseFarePerKm: FARE_TABLE.economy.perKm,
   appName: 'Taxi Pro',
   appLogo: '/icons/icon-512.png',
   contactEmail: 'support@taxipro.app',

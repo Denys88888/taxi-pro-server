@@ -86,6 +86,17 @@ export async function completePayment(
   );
 }
 
+// Server-side cancellation: release an approved-but-uncompleted payment
+// (escrow refund path — the user's Pi is never captured).
+export async function cancelPayment(piPaymentId: string): Promise<PiApiResult> {
+  assertConfigured();
+  return piFetch(
+    `/v2/payments/${piPaymentId}/cancel`,
+    'POST',
+    `Key ${env.PI_API_KEY}`
+  );
+}
+
 // Fetch the current state of a payment from Pi.
 export async function getPiPayment(piPaymentId: string): Promise<PiApiResult> {
   assertConfigured();

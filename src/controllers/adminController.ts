@@ -70,14 +70,94 @@ export async function updateUserBlock(req: Request, res: Response): Promise<void
   res.json(updated);
 }
 
-// GET /api/admin/rides?status= — all rides.
+// GET /api/admin/rides?status= — all rides, with party names for the table view.
 export async function listAllRides(req: Request, res: Response): Promise<void> {
   const statusParam = String(req.query.status ?? '');
   const status = RIDE_STATUSES.includes(statusParam as RideStatus)
     ? (statusParam as RideStatus)
     : undefined;
-  const rides = await store().listAllRides(status);
-  res.json({ rides });
+  const [rides, users] = await Promise.all([store().listAllRides(status), store().listUsers()]);
+  const names = new Map(users.map((u) => [u.uid, u.name]));
+  res.json({
+    rides: rides.map((r) => ({
+      ...r,
+      passengerName: names.get(r.passengerId) ?? r.passengerId,
+      driverName: r.driverId ? names.get(r.driverId) ?? r.driverId : undefined,
+    })),
+  });
+}
+
+// GET /api/admin/drivers?status=pending|approved|rejected — every driver
+// application with its review status (legacy records infer from licenseVerified).
+export async function listDrivers(req: Request, res: Response): Promise<void> {
+  const filter = String(req.query.status ?? '');
+  const users = await store().listUsers();
+  const drivers = users
+    .filter((u) => u.driverInfo)
+    .map((u) => ({
+      ...u,
+      applicationStatus:
+        u.driverInfo!.applicationStatus ??
+        (u.driverInfo!.licenseVerified ? 'approved' : 'pending'),
+    }));
+  res.json({
+    drivers: filter ? drivers.filter((d) => d.applicationStatus === filter) : drivers,
+  });
+}
+
+// GET /api/admin/analytics — charts for the admin dashboard: rides per hour of
+// day (last 7 days), revenue per day (last 14 days), top drivers and routes.
+export async function getAnalytics(_req: Request, res: Response): Promise<void> {
+  const [rides, users] = await Promise.all([store().listAllRides(), store().listUsers()]);
+  const names = new Map(users.map((u) => [u.uid, u.name]));
+  const now = Date.now();
+  const DAY = 24 * 60 * 60 * 1000;
+
+  const ridesByHour = new Array(24).fill(0) as number[];
+  for (const r of rides) {
+    const t = new Date(r.createdAt);
+    if (now - t.getTime() <= 7 * DAY) ridesByHour[t.getUTCHours()] += 1;
+  }
+
+  const revenueByDay: { date: string; revenue: number; rides: number }[] = [];
+  for (let i = 13; i >= 0; i--) {
+    const date = new Date(now - i * DAY).toISOString().slice(0, 10);
+    revenueByDay.push({ date, revenue: 0, rides: 0 });
+  }
+  const byDate = new Map(revenueByDay.map((d) => [d.date, d]));
+  for (const r of rides) {
+    if (r.status !== 'completed') continue;
+    const day = byDate.get(r.createdAt.slice(0, 10));
+    if (day) {
+      day.revenue = round(day.revenue + (r.platformFee || 0));
+      day.rides += 1;
+    }
+  }
+
+  const driverAgg = new Map<string, { rides: number; earnings: number }>();
+  const routeAgg = new Map<string, number>();
+  for (const r of rides) {
+    if (r.status !== 'completed') continue;
+    if (r.driverId) {
+      const agg = driverAgg.get(r.driverId) ?? { rides: 0, earnings: 0 };
+      agg.rides += 1;
+      agg.earnings = round(agg.earnings + (r.driverEarnings || 0) + (r.tipAmount || 0));
+      driverAgg.set(r.driverId, agg);
+    }
+    const short = (a?: string) => (a ?? '?').split(',')[0].trim();
+    const route = `${short(r.pickup.address)} → ${short(r.destination.address)}`;
+    routeAgg.set(route, (routeAgg.get(route) ?? 0) + 1);
+  }
+  const topDrivers = [...driverAgg.entries()]
+    .map(([uid, agg]) => ({ uid, name: names.get(uid) ?? uid, ...agg }))
+    .sort((a, b) => b.earnings - a.earnings)
+    .slice(0, 5);
+  const topRoutes = [...routeAgg.entries()]
+    .map(([route, count]) => ({ route, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  res.json({ ridesByHour, revenueByDay, topDrivers, topRoutes });
 }
 
 // GET /api/admin/reports?status= — complaint queue.
@@ -131,10 +211,15 @@ export async function verifyDriver(req: Request, res: Response): Promise<void> {
   const updated = approve
     ? await store().updateUser(req.params.id, {
         role: 'driver',
-        driverInfo: { ...user.driverInfo, licenseVerified: true },
+        driverInfo: { ...user.driverInfo, licenseVerified: true, applicationStatus: 'approved' },
       })
     : await store().updateUser(req.params.id, {
-        driverInfo: { ...user.driverInfo, licenseVerified: false, isOnline: false },
+        driverInfo: {
+          ...user.driverInfo,
+          licenseVerified: false,
+          isOnline: false,
+          applicationStatus: 'rejected',
+        },
       });
   sendToUser(req.params.id, {
     type: 'ride_status_update',

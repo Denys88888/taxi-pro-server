@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { pushToUser } from '../services/fcmService';
 import { calculateFare } from '../services/fareCalculator';
 import { getRouteInfo } from '../services/routingService';
+import { getSurge } from '../services/surgeService';
 import { genId, nowIso } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, type AuthedSocket } from './broadcast';
@@ -82,12 +83,20 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       const v = vehicle.parse(msg.vehicleType);
       const settings = await store().getSettings();
       // Real road distance/duration (haversine only as offline fallback).
-      const { distanceKm, durationMin } = await getRouteInfo([pickup, destination]);
+      const [{ distanceKm, durationMin }, surge] = await Promise.all([
+        getRouteInfo([pickup, destination]),
+        settings.surgeEnabled !== false
+          ? getSurge(pickup)
+          : Promise.resolve({ multiplier: 1, reason: 'normal' as const }),
+      ]);
       const breakdown = calculateFare({
         vehicleType: v,
         distanceKm,
         durationMin,
+        surge: surge.multiplier,
         platformFeePercent: settings.platformFeePercent,
+        minFare: settings.minFare,
+        baseFarePerKm: settings.baseFarePerKm,
       });
       const ride: Ride = {
         id: genId('ride'),
@@ -98,6 +107,8 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         distanceKm: Math.round(distanceKm * 100) / 100,
         estimatedDurationMin: durationMin,
         ...breakdown,
+        surgeMultiplier: surge.multiplier,
+        paymentStatus: 'pending',
         status: 'searching',
         createdAt: nowIso(),
         updatedAt: nowIso(),

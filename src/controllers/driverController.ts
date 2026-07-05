@@ -29,6 +29,7 @@ export async function registerDriver(req: Request, res: Response): Promise<void>
     vehiclePhoto: body.vehiclePhoto,
     licensePhoto: body.licensePhoto,
     licenseVerified: false, // pending admin approval
+    applicationStatus: 'pending',
     isOnline: false,
   };
   // Role stays 'passenger' until an admin verifies; store the pending driverInfo.

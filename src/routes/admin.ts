@@ -15,6 +15,8 @@ import {
   updateSettings,
   pendingDrivers,
   verifyDriver,
+  listDrivers,
+  getAnalytics,
 } from '../controllers/adminController';
 
 const router = Router();
@@ -29,6 +31,9 @@ const resolveSchema = z.object({
 const settingsSchema = z
   .object({
     platformFeePercent: z.number().min(0).max(20).optional(),
+    surgeEnabled: z.boolean().optional(),
+    minFare: z.number().min(0).max(100).optional(),
+    baseFarePerKm: z.number().min(0.1).max(10).optional(),
     appName: z.string().min(1).max(60).optional(),
     appLogo: z.string().optional(),
     contactEmail: z.string().email().optional(),
@@ -52,6 +57,8 @@ router.get('/reports', asyncHandler(listReports));
 router.patch('/reports/:id', validate(resolveSchema), asyncHandler(resolveReport));
 router.get('/settings', asyncHandler(getSettings));
 router.patch('/settings', validate(settingsSchema), asyncHandler(updateSettings));
+router.get('/analytics', asyncHandler(getAnalytics));
+router.get('/drivers', asyncHandler(listDrivers));
 router.get('/drivers/pending', asyncHandler(pendingDrivers));
 router.post('/drivers/:id/verify', validate(verifySchema), asyncHandler(verifyDriver));
 

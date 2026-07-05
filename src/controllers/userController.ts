@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
 import { nowIso } from '../utils/helpers';
-import type { User } from '../types';
+import type { User, SavedAddress } from '../types';
 
 // Reconstruct a minimal user record from the verified JWT identity. Used when the
 // store has no record yet (e.g. in-memory restart) — the JWT already proves a
@@ -41,4 +41,19 @@ export async function updateMe(req: Request, res: Response): Promise<void> {
   }
   const updated = await store().updateUser(req.user!.uid, patch);
   res.json(updated);
+}
+
+// GET /api/users/me/addresses — the user's saved quick-access places.
+export async function getSavedAddresses(req: Request, res: Response): Promise<void> {
+  const user = await ensureUser(req);
+  res.json({ addresses: user.savedAddresses ?? [] });
+}
+
+// PUT /api/users/me/addresses — replace the whole list (client is the source
+// of truth; it also mirrors the list to localStorage for offline use).
+export async function putSavedAddresses(req: Request, res: Response): Promise<void> {
+  const { addresses } = req.body as { addresses: SavedAddress[] };
+  await ensureUser(req);
+  const updated = await store().updateUser(req.user!.uid, { savedAddresses: addresses });
+  res.json({ addresses: updated?.savedAddresses ?? [] });
 }

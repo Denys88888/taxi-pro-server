@@ -31,14 +31,23 @@ export type PaymentStatus =
   | 'cancelled'
   | 'failed';
 
+// Escrow-style lifecycle of the ride's Pi payment as seen on the ride itself:
+// pending (not paid) → held (approved by Pi, funds reserved) → completed | refunded.
+export type RidePaymentStatus = 'pending' | 'held' | 'completed' | 'refunded';
+
 export interface GeoPoint {
   lat: number;
   lng: number;
   address?: string;
 }
 
+// Admin review state of a driver application. Legacy records may lack it:
+// fall back to licenseVerified ? 'approved' : 'pending'.
+export type DriverApplicationStatus = 'pending' | 'approved' | 'rejected';
+
 export interface DriverInfo {
   vehicleType: VehicleType;
+  applicationStatus?: DriverApplicationStatus;
   brand: string;
   model: string;
   color: string;
@@ -48,6 +57,14 @@ export interface DriverInfo {
   licenseVerified: boolean;
   isOnline: boolean;
   lastLocation?: GeoPoint;
+}
+
+// A user's quick-access saved place ("Home", "Work", "Parents", …).
+export interface SavedAddress {
+  label: string;
+  lat: number;
+  lng: number;
+  address?: string;
 }
 
 export interface User {
@@ -64,6 +81,7 @@ export interface User {
   fcmToken?: string;
   preferredLanguage?: string;
   preferredTheme?: 'light' | 'dark' | 'auto';
+  savedAddresses?: SavedAddress[];
   driverInfo?: DriverInfo;
   createdAt: string;
   updatedAt: string;
@@ -81,9 +99,15 @@ export interface Ride {
   distanceKm: number;
   estimatedDurationMin: number;
   fare: number;
+  // Surge multiplier the fare was computed with (1 = normal pricing).
+  surgeMultiplier?: number;
   platformFeePercent: number;
   platformFee: number;
   driverEarnings: number;
+  // Tip paid to the driver after completion (separate Pi transaction, no fee).
+  tipAmount?: number;
+  tipTxid?: string;
+  paymentStatus?: RidePaymentStatus;
   status: RideStatus;
   // Scheduled rides: ISO time the ride should be dispatched. Absent = immediate.
   scheduledAt?: string;
@@ -133,6 +157,8 @@ export interface Message {
 export interface Payment {
   id: string;
   rideId: string;
+  // 'ride' = the fare itself (escrowed); 'tip' = a post-ride tip to the driver.
+  type?: 'ride' | 'tip';
   amount: number;
   platformFeePercent: number;
   platformFee: number;
@@ -165,6 +191,12 @@ export interface Report {
 
 export interface Settings {
   platformFeePercent: number;
+  // Dynamic pricing on/off + fare knobs (admin-tunable).
+  surgeEnabled: boolean;
+  // Global minimum ride price (π); the per-vehicle table floor still applies.
+  minFare: number;
+  // Economy per-km rate (π); other vehicle classes scale proportionally.
+  baseFarePerKm: number;
   appName: string;
   appLogo: string;
   contactEmail: string;
