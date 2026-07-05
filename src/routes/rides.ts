@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
+import { rideCreateLimiter } from '../middleware/rateLimit';
 import {
   createRide,
   listRides,
@@ -61,7 +62,7 @@ const cancelSchema = z.object({
 
 router.use(requireAuth);
 
-router.post('/', validate(createSchema), asyncHandler(createRide));
+router.post('/', rideCreateLimiter, validate(createSchema), asyncHandler(createRide));
 router.get('/', asyncHandler(listRides));
 // Static paths must precede '/:id'.
 router.get('/surge', asyncHandler(getSurgeInfo));

@@ -26,3 +26,12 @@ export const messageLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'You are sending messages too fast.' },
 });
+
+// Ride creation limiter: 10 rides / 5 minutes / IP (prevents fare-spam abuse).
+export const rideCreateLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many ride requests. Please wait a moment.' },
+});
