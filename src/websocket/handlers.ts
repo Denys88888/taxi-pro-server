@@ -8,6 +8,8 @@ import { getSurge } from '../services/surgeService';
 import { genId, nowIso } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, type AuthedSocket } from './broadcast';
+
+const acceptingRides = new Set<string>();
 import type { Ride, GeoPoint } from '../types';
 
 const geo = z.object({
@@ -122,6 +124,12 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
 
     case 'ride_accept': {
       const rideId = String(msg.rideId ?? '');
+      if (acceptingRides.has(rideId)) {
+        send(ws, { type: 'error', message: 'Ride no longer available', code: 'TAKEN' });
+        return;
+      }
+      acceptingRides.add(rideId);
+      try {
       const driver = await store().getUser(uid);
       if (!driver || driver.role !== 'driver' || !driver.driverInfo) {
         send(ws, { type: 'error', message: 'Not a registered driver', code: 'NOT_DRIVER' });
@@ -160,6 +168,9 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         type: 'ride_assigned',
         rideId,
       });
+      } finally {
+        acceptingRides.delete(rideId);
+      }
       return;
     }
 
