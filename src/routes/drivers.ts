@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
+import { requireRole } from '../middleware/requireRole';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
@@ -36,9 +37,9 @@ const onlineSchema = z.object({
 router.use(requireAuth);
 
 router.post('/register', validate(registerSchema), asyncHandler(registerDriver));
-router.post('/location', validate(locationSchema), asyncHandler(updateLocation));
 router.get('/nearby', asyncHandler(nearbyDrivers));
-router.post('/online', validate(onlineSchema), asyncHandler(goOnline));
-router.post('/offline', asyncHandler(goOffline));
+router.post('/location', requireRole('driver'), validate(locationSchema), asyncHandler(updateLocation));
+router.post('/online', requireRole('driver'), validate(onlineSchema), asyncHandler(goOnline));
+router.post('/offline', requireRole('driver'), asyncHandler(goOffline));
 
 export default router;

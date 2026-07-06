@@ -14,12 +14,16 @@ export interface AuthedSocket extends WebSocket {
 const userSockets = new Map<string, AuthedSocket>();
 
 export function registerSocket(uid: string, ws: AuthedSocket): void {
+  const prev = userSockets.get(uid);
+  if (prev && prev !== ws && prev.readyState === WebSocket.OPEN) {
+    prev.close(4001, 'replaced');
+  }
   userSockets.set(uid, ws);
 }
 
-export function unregisterSocket(uid: string): void {
+export function unregisterSocket(uid: string, ws: AuthedSocket): void {
   const current = userSockets.get(uid);
-  if (current && (current.userId === uid)) userSockets.delete(uid);
+  if (current === ws) userSockets.delete(uid);
 }
 
 export function send(ws: AuthedSocket, payload: unknown): void {

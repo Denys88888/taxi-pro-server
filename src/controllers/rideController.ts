@@ -259,24 +259,16 @@ export async function updateRide(req: Request, res: Response): Promise<void> {
     return;
   }
   const allowed = [
-    'status',
     'passengerRating',
     'driverRating',
     'passengerReview',
     'driverReview',
-    'txid',
-    'paymentId',
   ] as const;
   const patch: Partial<Ride> = {};
   for (const key of allowed) {
     if (req.body[key] !== undefined) (patch as Record<string, unknown>)[key] = req.body[key];
   }
   const updated = await store().updateRide(req.params.id, patch);
-  if (patch.status) {
-    const payload = { type: 'ride_status_update', rideId: ride.id, status: patch.status, data: {} };
-    sendToUser(ride.passengerId, payload);
-    if (ride.driverId) sendToUser(ride.driverId, payload);
-  }
   // If a rating was submitted for a user, fold it into their running average.
   if (patch.driverRating && ride.driverId) await applyRating(ride.driverId, patch.driverRating);
   if (patch.passengerRating) await applyRating(ride.passengerId, patch.passengerRating);

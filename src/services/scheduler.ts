@@ -12,27 +12,35 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
       // Promote scheduled rides whose time has arrived.
       const scheduled = await store().listAllRides('scheduled');
       for (const ride of scheduled) {
-        if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
-          const updated = await store().updateRide(ride.id, { status: 'searching' });
-          broadcast({ type: 'ride_available', ride: updated ?? ride }, 'driver');
-          logger.info('[Scheduler] dispatched scheduled ride', { rideId: ride.id });
+        try {
+          if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
+            const updated = await store().updateRide(ride.id, { status: 'searching' });
+            broadcast({ type: 'ride_available', ride: updated ?? ride }, 'driver');
+            logger.info('[Scheduler] dispatched scheduled ride', { rideId: ride.id });
+          }
+        } catch (e) {
+          logger.warn('[Scheduler] failed to promote ride', { rideId: ride.id, error: (e as Error).message });
         }
       }
 
       // Auto-cancel rides stuck in 'searching' for too long.
       const searching = await store().listAllRides('searching');
       for (const ride of searching) {
-        if (now - new Date(ride.createdAt).getTime() > SEARCH_TIMEOUT_MS) {
-          const updated = await store().updateRide(ride.id, {
-            status: 'cancelled',
-          });
-          sendToUser(ride.passengerId, {
-            type: 'ride_status_update',
-            rideId: ride.id,
-            status: 'cancelled',
-            ride: updated ?? ride,
-          });
-          logger.info('[Scheduler] auto-cancelled stale ride', { rideId: ride.id });
+        try {
+          if (now - new Date(ride.createdAt).getTime() > SEARCH_TIMEOUT_MS) {
+            const updated = await store().updateRide(ride.id, {
+              status: 'cancelled',
+            });
+            sendToUser(ride.passengerId, {
+              type: 'ride_status_update',
+              rideId: ride.id,
+              status: 'cancelled',
+              ride: updated ?? ride,
+            });
+            logger.info('[Scheduler] auto-cancelled stale ride', { rideId: ride.id });
+          }
+        } catch (e) {
+          logger.warn('[Scheduler] failed to cancel ride', { rideId: ride.id, error: (e as Error).message });
         }
       }
     } catch (err) {

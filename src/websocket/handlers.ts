@@ -122,6 +122,15 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
 
     case 'ride_accept': {
       const rideId = String(msg.rideId ?? '');
+      const driver = await store().getUser(uid);
+      if (!driver || driver.role !== 'driver' || !driver.driverInfo) {
+        send(ws, { type: 'error', message: 'Not a registered driver', code: 'NOT_DRIVER' });
+        return;
+      }
+      if (driver.driverInfo.applicationStatus !== 'approved') {
+        send(ws, { type: 'error', message: 'Driver not verified', code: 'NOT_VERIFIED' });
+        return;
+      }
       const ride = await store().getRide(rideId);
       if (!ride) {
         send(ws, { type: 'error', message: 'Ride not found', code: 'NO_RIDE' });
@@ -131,7 +140,6 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Ride no longer available', code: 'TAKEN' });
         return;
       }
-      const driver = await store().getUser(uid);
       const updated = await store().updateRide(rideId, { status: 'assigned', driverId: uid });
       const driverInfo = {
         uid,
@@ -170,12 +178,26 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Ride not found', code: 'NO_RIDE' });
         return;
       }
+      if (ride.driverId !== uid) {
+        send(ws, { type: 'error', message: 'Not your ride', code: 'FORBIDDEN' });
+        return;
+      }
       const statusMap = {
         ride_arrived: 'arrived',
         ride_started: 'in_progress',
         ride_completed: 'completed',
       } as const;
+      const validTransitions: Record<string, string[]> = {
+        assigned: ['arrived'],
+        arrived: ['in_progress'],
+        in_progress: ['completed'],
+      };
       const status = statusMap[type];
+      const allowed = validTransitions[ride.status] ?? [];
+      if (!allowed.includes(status)) {
+        send(ws, { type: 'error', message: `Cannot transition from ${ride.status} to ${status}`, code: 'INVALID_TRANSITION' });
+        return;
+      }
       const updated = await store().updateRide(rideId, { status });
       notifyRideParties(updated ?? ride, {
         type: 'ride_status_update',

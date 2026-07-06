@@ -67,7 +67,7 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
     });
 
     ws.on('close', () => {
-      unregisterSocket(payload.uid);
+      unregisterSocket(payload.uid, ws);
       logger.info('[WS] disconnected', { uid: payload.uid });
     });
 
