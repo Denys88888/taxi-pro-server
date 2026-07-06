@@ -221,11 +221,17 @@ export async function verifyDriver(req: Request, res: Response): Promise<void> {
           applicationStatus: 'rejected',
         },
       });
-  sendToUser(req.params.id, {
+  const wsPayload: Record<string, unknown> = {
     type: 'ride_status_update',
     rideId: '',
     status: approve ? 'driver_approved' : 'driver_rejected',
     data: {},
-  });
+  };
+  if (approve && updated) {
+    const { signToken } = await import('../utils/jwt');
+    wsPayload.token = signToken({ uid: req.params.id, role: 'driver', username: updated.name });
+    wsPayload.user = updated;
+  }
+  sendToUser(req.params.id, wsPayload);
   res.json({ approved: approve, user: updated });
 }
