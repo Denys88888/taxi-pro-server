@@ -231,7 +231,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       const rideId = String(msg.rideId ?? '');
       const lat = Number(msg.lat);
       const lng = Number(msg.lng);
-      if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+      if (Number.isNaN(lat) || Number.isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
       const driver = await store().getUser(uid);
       if (driver?.driverInfo) {
         await store().updateUser(uid, {

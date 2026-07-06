@@ -14,7 +14,7 @@ const adminUids = new Set(
 // POST /api/auth/dev — sandbox-only: create/login a test user by name.
 // Allows testing in a regular browser without the Pi SDK.
 export async function devAuth(req: Request, res: Response): Promise<void> {
-  if (!env.PI_SANDBOX) {
+  if (!env.PI_SANDBOX || env.isProd) {
     res.status(403).json({ error: 'Dev auth is only available in sandbox mode' });
     return;
   }

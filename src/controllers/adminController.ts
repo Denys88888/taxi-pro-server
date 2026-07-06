@@ -66,7 +66,21 @@ export async function updateUserBlock(req: Request, res: Response): Promise<void
     res.status(404).json({ error: 'User not found' });
     return;
   }
-  if (isBlocked) sendToUser(req.params.id, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+  if (isBlocked) {
+    sendToUser(req.params.id, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+    // Cancel any active rides for the blocked user.
+    const activeStatuses: RideStatus[] = ['assigned', 'arrived', 'in_progress', 'searching'];
+    for (const status of activeStatuses) {
+      const rides = await store().listAllRides(status);
+      for (const ride of rides) {
+        if (ride.passengerId === req.params.id || ride.driverId === req.params.id) {
+          await store().updateRide(ride.id, { status: 'cancelled' });
+          const other = ride.passengerId === req.params.id ? ride.driverId : ride.passengerId;
+          if (other) sendToUser(other, { type: 'ride_status_update', rideId: ride.id, status: 'cancelled', data: {} });
+        }
+      }
+    }
+  }
   res.json(updated);
 }
 
