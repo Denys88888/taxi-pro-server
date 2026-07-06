@@ -10,7 +10,7 @@ const LOCALHOST = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
 export const corsMiddleware = cors({
   origin(origin, callback) {
-    const allowLocal = !env.isProd && origin && LOCALHOST.test(origin);
+    const allowLocal = (!env.isProd || env.PI_SANDBOX) && origin && LOCALHOST.test(origin);
     if (!origin || env.corsOrigins.includes(origin) || allowLocal) {
       callback(null, true);
       return;
