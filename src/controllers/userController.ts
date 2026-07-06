@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
 import { nowIso } from '../utils/helpers';
-import type { User, SavedAddress } from '../types';
+import type { User, Role, SavedAddress } from '../types';
 
 // Reconstruct a minimal user record from the verified JWT identity. Used when the
 // store has no record yet (e.g. in-memory restart) — the JWT already proves a
@@ -41,6 +41,25 @@ export async function updateMe(req: Request, res: Response): Promise<void> {
   }
   const updated = await store().updateUser(req.user!.uid, patch);
   res.json(updated);
+}
+
+// POST /api/users/me/switch-role — switch between passenger and driver roles.
+// Returns a new JWT with the requested role so the client can re-authenticate.
+export async function switchRole(req: Request, res: Response): Promise<void> {
+  const { role } = req.body as { role: Role };
+  const user = await ensureUser(req);
+
+  if (role === 'driver') {
+    if (!user.driverInfo || user.driverInfo.applicationStatus !== 'approved') {
+      res.status(400).json({ error: 'Driver registration not approved' });
+      return;
+    }
+  }
+
+  const updated = await store().updateUser(user.uid, { role });
+  const { signToken } = await import('../utils/jwt');
+  const token = signToken({ uid: user.uid, role, username: user.name });
+  res.json({ token, user: updated });
 }
 
 // GET /api/users/me/addresses — the user's saved quick-access places.

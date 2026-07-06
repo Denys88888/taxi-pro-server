@@ -6,6 +6,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import {
   getMe,
   updateMe,
+  switchRole,
   getSavedAddresses,
   putSavedAddresses,
 } from '../controllers/userController';
@@ -36,9 +37,14 @@ const addressesSchema = z.object({
     .max(10),
 });
 
+const switchRoleSchema = z.object({
+  role: z.enum(['passenger', 'driver']),
+});
+
 router.use(requireAuth);
 router.get('/me', asyncHandler(getMe));
 router.patch('/me', validate(updateSchema), asyncHandler(updateMe));
+router.post('/me/switch-role', validate(switchRoleSchema), asyncHandler(switchRole));
 router.get('/me/addresses', asyncHandler(getSavedAddresses));
 router.put('/me/addresses', validate(addressesSchema), asyncHandler(putSavedAddresses));
 
