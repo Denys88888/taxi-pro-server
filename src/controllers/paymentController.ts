@@ -28,6 +28,17 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
+  if (type !== 'tip' && ride.paymentId) {
+    const existing = await store().getPayment(ride.paymentId);
+    if (existing && !['failed', 'cancelled'].includes(existing.status)) {
+      res.status(409).json({ error: 'Payment already in progress' });
+      return;
+    }
+  }
+  if (type !== 'tip' && !['assigned', 'arrived', 'in_progress', 'completed'].includes(ride.status)) {
+    res.status(409).json({ error: 'Ride not ready for payment' });
+    return;
+  }
   if (type === 'tip') {
     if (ride.status !== 'completed' || !ride.driverId) {
       res.status(409).json({ error: 'Tips are only possible after a completed ride' });
@@ -84,6 +95,11 @@ export async function approvePayment(req: Request, res: Response): Promise<void>
     res.status(404).json({ error: 'Payment not found' });
     return;
   }
+  const ride = await store().getRide(payment.rideId);
+  if (ride && ride.passengerId !== req.user!.uid) {
+    res.status(403).json({ error: 'Not the ride passenger' });
+    return;
+  }
   const result = await piApprove(piPaymentId);
   await store().updatePayment(payment.id, {
     piPaymentId,
@@ -103,6 +119,11 @@ export async function completePayment(req: Request, res: Response): Promise<void
   const payment = await store().getPayment(req.params.id);
   if (!payment) {
     res.status(404).json({ error: 'Payment not found' });
+    return;
+  }
+  const rideCheck = await store().getRide(payment.rideId);
+  if (rideCheck && rideCheck.passengerId !== req.user!.uid) {
+    res.status(403).json({ error: 'Not the ride passenger' });
     return;
   }
   const result = await piComplete(piPaymentId, txid);
