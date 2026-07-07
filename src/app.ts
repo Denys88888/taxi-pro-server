@@ -21,6 +21,13 @@ import reportRoutes from './routes/reports';
 export function createApp(): Express {
   const app = express();
 
+  // Render (and most PaaS) put a reverse proxy in front of us. Trust exactly one
+  // hop so req.ip and express-rate-limit read the real client IP from
+  // X-Forwarded-For — otherwise every client shares the proxy's IP and one
+  // user's traffic exhausts the rate limit for everyone. Trusting a fixed hop
+  // count (not `true`) avoids X-Forwarded-For spoofing.
+  app.set('trust proxy', 1);
+
   // Security headers, incl. HSTS (HTTPS-only enforcement at the edge) and a
   // strict Content-Security-Policy. This is a JSON API that serves no HTML or
   // scripts, so everything is locked down to 'none'.
