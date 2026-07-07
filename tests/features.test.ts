@@ -47,7 +47,7 @@ describe('multi-stop rides', () => {
       .send({ pickup, destination, vehicleType: 'economy' });
     const withStop = await request(app)
       .post('/api/rides')
-      .set(authFor('p-ms'))
+      .set(authFor('p-ms2')) // distinct passenger: one-active-ride guard
       .send({
         pickup,
         destination,

@@ -36,15 +36,17 @@ describe('rides API', () => {
   });
 
   it('lets the owner fetch, then cancel the ride', async () => {
-    const created = await request(app).post('/api/rides').set(auth).send(validRide);
+    // Distinct passenger so the one-active-ride guard doesn't collide with other tests.
+    const ownAuth = { Authorization: `Bearer ${signToken({ uid: 'passenger-fetch', role: 'passenger' })}` };
+    const created = await request(app).post('/api/rides').set(ownAuth).send(validRide);
     const id = created.body.id;
 
-    const got = await request(app).get(`/api/rides/${id}`).set(auth);
+    const got = await request(app).get(`/api/rides/${id}`).set(ownAuth);
     expect(got.status).toBe(200);
 
     const cancelled = await request(app)
       .post(`/api/rides/${id}/cancel`)
-      .set(auth)
+      .set(ownAuth)
       .send({ reason: 'changed my mind' });
     expect(cancelled.status).toBe(200);
     expect(cancelled.body.status).toBe('cancelled');
@@ -52,7 +54,8 @@ describe('rides API', () => {
   });
 
   it('forbids a stranger from viewing the ride (403)', async () => {
-    const created = await request(app).post('/api/rides').set(auth).send(validRide);
+    const ownAuth = { Authorization: `Bearer ${signToken({ uid: 'passenger-owner', role: 'passenger' })}` };
+    const created = await request(app).post('/api/rides').set(ownAuth).send(validRide);
     const strangerToken = signToken({ uid: 'someone-else', role: 'passenger' });
     const res = await request(app)
       .get(`/api/rides/${created.body.id}`)
