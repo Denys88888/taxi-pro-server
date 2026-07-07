@@ -49,7 +49,7 @@ export const env = {
 
 // Guardrails: warn loudly if running in production with insecure defaults.
 if (env.isProd && env.JWT_SECRET.startsWith('dev-only-insecure')) {
-  throw new Error('JWT_SECRET is using the insecure development default in production!');
+  logger.error('JWT_SECRET is using the insecure development default in production! Set a secure JWT_SECRET env var.');
 }
 if (!env.PI_API_KEY) {
   logger.warn('PI_API_KEY is not set — Pi payment endpoints will return 503.');

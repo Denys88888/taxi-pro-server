@@ -24,12 +24,15 @@ server.listen(env.PORT, () => {
 });
 
 // ─── Keep-alive (Render free tier sleeps after 15 min idle) ───────────────────
-if (env.RENDER_URL) {
+// Render provides RENDER_EXTERNAL_URL automatically; RENDER_URL overrides it.
+const keepAliveUrl = env.RENDER_URL ?? process.env.RENDER_EXTERNAL_URL;
+if (keepAliveUrl) {
   setInterval(() => {
-    fetch(`${env.RENDER_URL}/api/health`).catch(() => {
+    fetch(`${keepAliveUrl}/api/health`).catch(() => {
       /* transient network error — the next tick retries */
     });
-  }, 14 * 60 * 1000);
+  }, 10 * 60 * 1000);
+  logger.info('[Server] Keep-alive self-ping enabled.', { url: keepAliveUrl });
 }
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
