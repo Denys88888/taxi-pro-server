@@ -77,7 +77,21 @@ describe('scheduled rides', () => {
 
 describe('fare negotiation (inDriver)', () => {
   it('lets a driver offer and a passenger accept', async () => {
-    await seedUser({ uid: 'nd-driver', role: 'driver', name: 'Dana' });
+    await seedUser({
+      uid: 'nd-driver',
+      role: 'driver',
+      name: 'Dana',
+      driverInfo: {
+        vehicleType: 'economy',
+        brand: 'Toyota',
+        model: 'Prius',
+        color: 'white',
+        number: 'WX 1',
+        licenseVerified: true,
+        applicationStatus: 'approved',
+        isOnline: true,
+      },
+    });
     const created = await request(app)
       .post('/api/rides')
       .set(authFor('nd-pass'))

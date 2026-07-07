@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
+import { requireRole } from '../middleware/requireRole';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 import { rideCreateLimiter } from '../middleware/rateLimit';
@@ -71,7 +72,7 @@ router.get('/:id', asyncHandler(getRide));
 router.patch('/:id', validate(updateSchema), asyncHandler(updateRide));
 router.post('/:id/cancel', validate(cancelSchema), asyncHandler(cancelRide));
 router.post('/:id/share', asyncHandler(shareRide));
-router.post('/:id/offers', validate(offerSchema), asyncHandler(submitOffer));
+router.post('/:id/offers', requireRole('driver'), validate(offerSchema), asyncHandler(submitOffer));
 router.post('/:id/offers/accept', validate(acceptOfferSchema), asyncHandler(acceptOffer));
 
 export default router;
