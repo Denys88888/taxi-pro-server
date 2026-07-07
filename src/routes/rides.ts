@@ -52,8 +52,6 @@ const updateSchema = z
     driverRating: z.number().min(1).max(5).optional(),
     passengerReview: z.string().max(500).optional(),
     driverReview: z.string().max(500).optional(),
-    txid: z.string().optional(),
-    paymentId: z.string().optional(),
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' });
 
