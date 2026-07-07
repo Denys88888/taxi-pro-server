@@ -23,6 +23,17 @@ export async function createRide(req: Request, res: Response): Promise<void> {
       negotiable?: boolean;
       offeredFare?: number;
     };
+  // One active ride per passenger: reject if they already have a non-terminal
+  // ride, so the driver pool and the passenger's own tracking stay unambiguous.
+  const ACTIVE: RideStatus[] = ['scheduled', 'searching', 'assigned', 'arrived', 'in_progress'];
+  for (const st of ACTIVE) {
+    const { total } = await store().listRidesByUser(req.user!.uid, st, 1, 1);
+    if (total > 0) {
+      res.status(409).json({ error: 'You already have an active ride', code: 'ACTIVE_RIDE_EXISTS' });
+      return;
+    }
+  }
+
   const settings = await store().getSettings();
   // Distance follows the full path (pickup → stops… → destination) along the
   // road network; haversine is only the offline fallback inside getRouteInfo.
