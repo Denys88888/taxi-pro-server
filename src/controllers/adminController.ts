@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
 import { round } from '../utils/helpers';
-import { sendToUser } from '../websocket/broadcast';
+import { sendToUser, closeUserSocket } from '../websocket/broadcast';
 import type { Settings, Role, RideStatus } from '../types';
 
 const ROLES: Role[] = ['passenger', 'driver', 'admin'];
@@ -67,7 +67,9 @@ export async function updateUserBlock(req: Request, res: Response): Promise<void
     return;
   }
   if (isBlocked) {
-    sendToUser(req.params.id, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+    // Deliver the block notice, then sever the live socket so the banned user
+    // can't keep acting over their existing connection.
+    closeUserSocket(req.params.id, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
     // Cancel any active rides for the blocked user.
     const activeStatuses: RideStatus[] = ['assigned', 'arrived', 'in_progress', 'searching'];
     for (const status of activeStatuses) {

@@ -2,6 +2,7 @@ import type { Server as HttpServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { URL } from 'url';
 import { verifyToken } from '../utils/jwt';
+import { store } from '../models';
 import { logger } from '../utils/logger';
 import { handleMessage } from './handlers';
 import {
@@ -19,7 +20,7 @@ const HEARTBEAT_MS = 30_000;
 export function initWebSocket(httpServer: HttpServer): WebSocketServer {
   const wss = new WebSocketServer({ server: httpServer });
 
-  wss.on('connection', (socket, req) => {
+  wss.on('connection', async (socket, req) => {
     const ws = socket as AuthedSocket;
     let token: string | null = null;
     try {
@@ -34,6 +35,18 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
       send(ws, { type: 'auth_error', message: 'Invalid or missing token' });
       ws.close(1008, 'Unauthorized');
       return;
+    }
+
+    // Reject sockets from users blocked after login (positive check only).
+    try {
+      const user = await store().getUser(payload.uid);
+      if (user?.isBlocked) {
+        send(ws, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+        ws.close(1008, 'Blocked');
+        return;
+      }
+    } catch {
+      /* store unavailable — fall through on the valid token */
     }
 
     ws.userId = payload.uid;

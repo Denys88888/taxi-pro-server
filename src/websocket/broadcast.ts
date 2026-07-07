@@ -30,6 +30,16 @@ export function send(ws: AuthedSocket, payload: unknown): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
+// Force-close a user's live socket (e.g. when an admin blocks them), after
+// optionally delivering a final payload. Code 1008 = policy violation.
+export function closeUserSocket(uid: string, finalPayload?: unknown): void {
+  const ws = userSockets.get(uid);
+  if (!ws) return;
+  if (finalPayload && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(finalPayload));
+  ws.close(1008, 'Blocked');
+  userSockets.delete(uid);
+}
+
 // Send to a specific user if they are connected. Returns true if delivered.
 export function sendToUser(uid: string, payload: unknown): boolean {
   const ws = userSockets.get(uid);
