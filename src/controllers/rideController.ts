@@ -195,6 +195,11 @@ export async function submitOffer(req: Request, res: Response): Promise<void> {
     return;
   }
   const driver = await store().getUser(req.user!.uid);
+  // Only a verified/approved driver may bid — mirrors the ride_accept WS guard.
+  if (!driver?.driverInfo || driver.driverInfo.applicationStatus !== 'approved') {
+    res.status(403).json({ error: 'Only approved drivers can submit offers' });
+    return;
+  }
   const offers = (ride.offers ?? []).filter((o) => o.driverId !== req.user!.uid);
   offers.push({
     driverId: req.user!.uid,
