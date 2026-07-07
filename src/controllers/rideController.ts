@@ -258,15 +258,26 @@ export async function updateRide(req: Request, res: Response): Promise<void> {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
-  const allowed = [
-    'passengerRating',
-    'driverRating',
-    'passengerReview',
-    'driverReview',
-  ] as const;
+  // Each party may only rate the OTHER party, and only once the ride is done.
+  // Passenger → driverRating/driverReview; driver → passengerRating/passengerReview.
+  const isPassenger = ride.passengerId === uid;
+  const allowed = isPassenger
+    ? (['driverRating', 'driverReview'] as const)
+    : (['passengerRating', 'passengerReview'] as const);
+  const wantsRating = ['passengerRating', 'driverRating', 'passengerReview', 'driverReview'].some(
+    (k) => req.body[k] !== undefined
+  );
+  if (wantsRating && ride.status !== 'completed') {
+    res.status(409).json({ error: 'Can only rate a completed ride' });
+    return;
+  }
   const patch: Partial<Ride> = {};
   for (const key of allowed) {
     if (req.body[key] !== undefined) (patch as Record<string, unknown>)[key] = req.body[key];
+  }
+  if (Object.keys(patch).length === 0) {
+    res.status(400).json({ error: 'No permitted fields to update' });
+    return;
   }
   const updated = await store().updateRide(req.params.id, patch);
   // If a rating was submitted for a user, fold it into their running average.
