@@ -164,3 +164,35 @@ describe('reports (complaints)', () => {
     expect(list.body.reports.some((r: { id: string }) => r.id === ok.body.id)).toBe(true);
   });
 });
+
+describe('payment completion idempotency', () => {
+  it('does not credit a tip twice when complete is called again', async () => {
+    await seedUser({ uid: 'idem-pass', role: 'passenger' });
+    await seedUser({ uid: 'idem-drv', role: 'driver' });
+    const now = nowIso();
+    await store().saveRide({
+      id: 'idem-ride', passengerId: 'idem-pass', driverId: 'idem-drv',
+      pickup, destination, vehicleType: 'economy', distanceKm: 3, estimatedDurationMin: 8,
+      fare: 5, platformFeePercent: 10, platformFee: 0.5, driverEarnings: 4.5,
+      surgeMultiplier: 1, paymentStatus: 'completed', status: 'completed',
+      tipAmount: 2, createdAt: now, updatedAt: now,
+    } as never);
+    // A tip payment already marked completed.
+    await store().savePayment({
+      id: 'idem-pay', rideId: 'idem-ride', type: 'tip', amount: 2,
+      platformFeePercent: 0, platformFee: 0, driverEarnings: 2,
+      status: 'completed', txid: 'tx-original', createdAt: now, updatedAt: now,
+    } as never);
+
+    const res = await request(app)
+      .post('/api/payments/idem-pay/complete')
+      .set(authFor('idem-pass'))
+      .send({ piPaymentId: 'pi-1', txid: 'tx-retry' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('already_completed');
+    // Tip must remain 2, not 4.
+    const ride = await store().getRide('idem-ride');
+    expect(ride?.tipAmount).toBe(2);
+  });
+});

@@ -126,6 +126,12 @@ export async function completePayment(req: Request, res: Response): Promise<void
     res.status(403).json({ error: 'Not the ride passenger' });
     return;
   }
+  // Idempotency: a retried/duplicated complete must not run twice — otherwise a
+  // tip would be credited to the driver more than once.
+  if (payment.status === 'completed') {
+    res.status(200).json({ success: true, txid: payment.txid ?? txid, status: 'already_completed' });
+    return;
+  }
   const result = await piComplete(piPaymentId, txid);
   await store().updatePayment(payment.id, {
     piPaymentId,
