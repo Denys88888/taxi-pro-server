@@ -90,12 +90,13 @@ export class FirestoreStore implements DataStore {
     return { rides: list.slice(start, start + limit), total, page, limit };
   }
   async listAllRides(status?: RideStatus): Promise<Ride[]> {
-    let q: adminNs.firestore.Query = this.db()
-      .collection('rides')
-      .orderBy('createdAt', 'desc');
-    if (status) q = q.where('status', '==', status);
+    // status + orderBy(createdAt) needs a composite index Firestore doesn't
+    // have; filter server-side and sort in memory so the scheduler never dies.
+    let q: adminNs.firestore.Query = this.db().collection('rides');
+    q = status ? q.where('status', '==', status) : q.orderBy('createdAt', 'desc');
     const snap = await q.get();
-    return snap.docs.map((d) => d.data() as Ride);
+    const rides = snap.docs.map((d) => d.data() as Ride);
+    return status ? rides.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : rides;
   }
 
   async getMessages(chatId: string): Promise<Message[]> {
