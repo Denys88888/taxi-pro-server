@@ -33,6 +33,7 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
           if (now - new Date(ride.createdAt).getTime() > SEARCH_TIMEOUT_MS) {
             const updated = await store().updateRide(ride.id, {
               status: 'cancelled',
+              paymentStatus: ride.paymentStatus === 'held' ? 'refunded' : 'cancelled',
             });
             sendToUser(ride.passengerId, {
               type: 'ride_status_update',
@@ -56,7 +57,10 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
         for (const ride of rides) {
           try {
             if (now - new Date(ride.updatedAt ?? ride.createdAt).getTime() > timeout) {
-              const updated = await store().updateRide(ride.id, { status: 'cancelled' });
+              const updated = await store().updateRide(ride.id, {
+                status: 'cancelled',
+                paymentStatus: ride.paymentStatus === 'held' ? 'refunded' : 'cancelled',
+              });
               sendToUser(ride.passengerId, {
                 type: 'ride_status_update',
                 rideId: ride.id,

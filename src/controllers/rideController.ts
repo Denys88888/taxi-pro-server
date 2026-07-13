@@ -331,8 +331,11 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
   const cancellationFee = feeApplies
     ? round((ride.fare * LATE_CANCELLATION_FEE_PERCENT) / 100)
     : 0;
-  // Escrow: a held (approved, not completed) Pi payment is released back.
-  const paymentStatus = ride.paymentStatus === 'held' ? 'refunded' : ride.paymentStatus;
+  // Escrow: a held payment is refunded; a pending (not yet initiated) payment
+  // is marked cancelled so the UI doesn't show "Awaiting payment" on cancelled rides.
+  const paymentStatus = ride.paymentStatus === 'held' ? 'refunded'
+    : ride.paymentStatus === 'pending' ? 'cancelled'
+    : ride.paymentStatus;
   if (ride.paymentStatus === 'held' && ride.paymentId) {
     await releaseHeldPayment(ride.paymentId);
   }

@@ -32,8 +32,8 @@ export type PaymentStatus =
   | 'failed';
 
 // Escrow-style lifecycle of the ride's Pi payment as seen on the ride itself:
-// pending (not paid) → held (approved by Pi, funds reserved) → completed | refunded.
-export type RidePaymentStatus = 'pending' | 'held' | 'completed' | 'refunded';
+// pending (not yet initiated) → held (approved, funds reserved) → completed | refunded | cancelled.
+export type RidePaymentStatus = 'pending' | 'held' | 'completed' | 'refunded' | 'cancelled';
 
 export interface GeoPoint {
   lat: number;
