@@ -38,6 +38,10 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
     }
 
     // Reject sockets from users blocked after login (positive check only).
+    // Also prefer the CURRENT role from the store over the token claim — a
+    // driver approved after login otherwise keeps a stale 'passenger' role and
+    // never receives ride_available broadcasts until they re-login.
+    let role = payload.role;
     try {
       const user = await store().getUser(payload.uid);
       if (user?.isBlocked) {
@@ -45,16 +49,17 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
         ws.close(1008, 'Blocked');
         return;
       }
+      if (user) role = user.role;
     } catch {
       /* store unavailable — fall through on the valid token */
     }
 
     ws.userId = payload.uid;
-    ws.role = payload.role;
+    ws.role = role;
     ws.isAlive = true;
     registerSocket(payload.uid, ws);
-    send(ws, { type: 'authenticated', userId: payload.uid, role: payload.role });
-    logger.info('[WS] connected', { uid: payload.uid, role: payload.role });
+    send(ws, { type: 'authenticated', userId: payload.uid, role });
+    logger.info('[WS] connected', { uid: payload.uid, role });
 
     ws.on('pong', () => {
       ws.isAlive = true;

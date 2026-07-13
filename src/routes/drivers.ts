@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth';
-import { requireRole } from '../middleware/requireRole';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
@@ -38,8 +37,11 @@ router.use(requireAuth);
 
 router.post('/register', validate(registerSchema), asyncHandler(registerDriver));
 router.get('/nearby', asyncHandler(nearbyDrivers));
-router.post('/location', requireRole('driver'), validate(locationSchema), asyncHandler(updateLocation));
-router.post('/online', requireRole('driver'), validate(onlineSchema), asyncHandler(goOnline));
-router.post('/offline', requireRole('driver'), asyncHandler(goOffline));
+// No requireRole here: the JWT role claim goes stale when an admin approves a
+// driver mid-session (the token still says 'passenger'). The controllers gate
+// on the CURRENT store state (licenseVerified / driverInfo) instead.
+router.post('/location', validate(locationSchema), asyncHandler(updateLocation));
+router.post('/online', validate(onlineSchema), asyncHandler(goOnline));
+router.post('/offline', asyncHandler(goOffline));
 
 export default router;
