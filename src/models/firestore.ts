@@ -100,12 +100,15 @@ export class FirestoreStore implements DataStore {
   }
 
   async getMessages(chatId: string): Promise<Message[]> {
+    // No orderBy alongside where — that combination requires a composite index
+    // (same failure class as listAllRides); sort in memory instead.
     const snap = await this.db()
       .collection('messages')
       .where('chatId', '==', chatId)
-      .orderBy('timestamp', 'asc')
       .get();
-    return snap.docs.map((d) => d.data() as Message);
+    return snap.docs
+      .map((d) => d.data() as Message)
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
   async saveMessage(msg: Message): Promise<void> {
     await this.db().collection('messages').doc(msg.id).set(msg);
@@ -137,12 +140,12 @@ export class FirestoreStore implements DataStore {
     await this.db().collection('reports').doc(report.id).set(report);
   }
   async listReports(status?: Report['status']): Promise<Report[]> {
-    let q: adminNs.firestore.Query = this.db()
-      .collection('reports')
-      .orderBy('createdAt', 'desc');
-    if (status) q = q.where('status', '==', status);
+    // where + orderBy needs a composite index — filter only, sort in memory.
+    let q: adminNs.firestore.Query = this.db().collection('reports');
+    q = status ? q.where('status', '==', status) : q.orderBy('createdAt', 'desc');
     const snap = await q.get();
-    return snap.docs.map((d) => d.data() as Report);
+    const reports = snap.docs.map((d) => d.data() as Report);
+    return status ? reports.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : reports;
   }
   async updateReport(id: string, patch: Partial<Report>): Promise<Report | null> {
     const ref = this.db().collection('reports').doc(id);
