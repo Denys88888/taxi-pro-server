@@ -54,20 +54,18 @@ export async function piAuth(req: Request, res: Response): Promise<void> {
 
   const existing = await store().getUser(piUser.uid);
   const isAdmin = adminUids.has(piUser.uid);
-  const user: User = existing
-    ? isAdmin && existing.role !== 'admin'
-      ? { ...existing, role: 'admin' }
-      : existing
-    : {
-        uid: piUser.uid,
-        role: isAdmin ? 'admin' : 'passenger',
-        name: piUser.username,
-        rating: 5,
-        ratingCount: 0,
-        isBlocked: false,
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      };
+  // For new users: grant admin role if UID is in ADMIN_UIDS, otherwise passenger.
+  // For existing users: keep whatever role is stored (allows admins to switch to driver).
+  const user: User = existing ?? {
+    uid: piUser.uid,
+    role: isAdmin ? 'admin' : 'passenger',
+    name: piUser.username,
+    rating: 5,
+    ratingCount: 0,
+    isBlocked: false,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
   await store().saveUser(user);
 
   if (user.isBlocked) {
