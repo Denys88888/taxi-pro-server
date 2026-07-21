@@ -54,13 +54,15 @@ export async function listUsers(req: Request, res: Response): Promise<void> {
 
 // PATCH /api/admin/users/:id — block/unblock a user or change their role.
 export async function updateUserBlock(req: Request, res: Response): Promise<void> {
-  const { isBlocked, blockReason, role } = req.body as {
+  const { isBlocked, blockReason, role, driverInfo } = req.body as {
     isBlocked?: boolean;
     blockReason?: string;
     role?: string;
+    driverInfo?: Record<string, unknown>;
   };
   const patch: Record<string, unknown> = {};
   if (role !== undefined) patch.role = role;
+  if (driverInfo !== undefined) patch.driverInfo = driverInfo;
   if (isBlocked !== undefined) {
     patch.isBlocked = isBlocked;
     patch.blockReason = isBlocked ? blockReason : undefined;
