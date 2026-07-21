@@ -22,9 +22,10 @@ import {
 const router = Router();
 
 const blockSchema = z.object({
-  isBlocked: z.boolean(),
+  isBlocked: z.boolean().optional(),
   blockReason: z.string().max(300).optional(),
-});
+  role: z.enum(['passenger', 'driver', 'admin']).optional(),
+}).refine((o) => o.isBlocked !== undefined || o.role !== undefined, { message: 'isBlocked or role required' });
 const resolveSchema = z.object({
   status: z.enum(['resolved', 'dismissed']),
 });
