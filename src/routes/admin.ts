@@ -25,7 +25,8 @@ const blockSchema = z.object({
   isBlocked: z.boolean().optional(),
   blockReason: z.string().max(300).optional(),
   role: z.enum(['passenger', 'driver', 'admin']).optional(),
-}).refine((o) => o.isBlocked !== undefined || o.role !== undefined, { message: 'isBlocked or role required' });
+  driverInfo: z.record(z.unknown()).optional(),
+}).refine((o) => o.isBlocked !== undefined || o.role !== undefined || o.driverInfo !== undefined, { message: 'isBlocked, role, or driverInfo required' });
 const resolveSchema = z.object({
   status: z.enum(['resolved', 'dismissed']),
 });
