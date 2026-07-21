@@ -52,16 +52,21 @@ export async function listUsers(req: Request, res: Response): Promise<void> {
   res.json({ users: filtered });
 }
 
-// PATCH /api/admin/users/:id — block or unblock a user.
+// PATCH /api/admin/users/:id — block/unblock a user or change their role.
 export async function updateUserBlock(req: Request, res: Response): Promise<void> {
-  const { isBlocked, blockReason } = req.body as {
-    isBlocked: boolean;
+  const { isBlocked, blockReason, role } = req.body as {
+    isBlocked?: boolean;
     blockReason?: string;
+    role?: string;
   };
-  const updated = await store().updateUser(req.params.id, {
-    isBlocked,
-    blockReason: isBlocked ? blockReason : undefined,
-  });
+  const patch: Record<string, unknown> = {};
+  if (role !== undefined) patch.role = role;
+  if (isBlocked !== undefined) {
+    patch.isBlocked = isBlocked;
+    patch.blockReason = isBlocked ? blockReason : undefined;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updated = await store().updateUser(req.params.id, patch as any);
   if (!updated) {
     res.status(404).json({ error: 'User not found' });
     return;
