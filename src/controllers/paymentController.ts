@@ -4,6 +4,7 @@ import {
   approvePayment as piApprove,
   completePayment as piComplete,
   cancelPayment as piCancel,
+  getPiPayment,
 } from '../services/piService';
 import { sendToUser } from '../websocket/broadcast';
 import { genId, nowIso, round } from '../utils/helpers';
@@ -30,7 +31,22 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
   }
   if (type !== 'tip' && ride.paymentId) {
     const existing = await store().getPayment(ride.paymentId);
-    if (existing && !['failed', 'cancelled'].includes(existing.status)) {
+    if (existing && existing.status === 'approved') {
+      // The fare was held (Pi escrow) but our completion call never landed —
+      // the passenger's wallet was interrupted mid-flow (app killed, connection
+      // dropped, Pi Browser backgrounded). Nothing else can ever unstick this
+      // ride, so recover the stale hold instead of permanently blocking with
+      // "payment already in progress".
+      await recoverStalePayment(existing);
+      const refreshedRide = await store().getRide(rideId);
+      if (refreshedRide?.txid) {
+        // Pi's side had actually completed — the ride is already paid, so
+        // creating a new payment on top of it would double-charge. Report
+        // the true state instead.
+        res.status(409).json({ error: 'Payment already completed' });
+        return;
+      }
+    } else if (existing && !['failed', 'cancelled'].includes(existing.status)) {
       res.status(409).json({ error: 'Payment already in progress' });
       return;
     }
@@ -163,6 +179,44 @@ export async function completePayment(req: Request, res: Response): Promise<void
   }
   logger.info('[Payment] complete', { paymentId: payment.id, type: payment.type, ok: result.ok });
   res.status(result.ok ? 200 : 502).json({ success: result.ok, txid, status: result.status });
+}
+
+// A held (approved) fare payment whose completion never landed on our side —
+// the passenger's wallet may have actually finished the transfer before the
+// interruption (app killed, dropped connection) hit. Ask Pi for the real
+// state before touching anything: cancelling a payment Pi already completed
+// would incorrectly leave the ride unpaid while the passenger's Pi was
+// captured, and creating a fresh payment on top would double-charge them.
+export async function recoverStalePayment(payment: Payment): Promise<void> {
+  if (!payment.piPaymentId) {
+    await releaseHeldPayment(payment.id);
+    return;
+  }
+  try {
+    const { data } = await getPiPayment<{ transaction?: { txid?: string } | null }>(
+      payment.piPaymentId
+    );
+    const txid = data.transaction?.txid;
+    if (txid) {
+      // Pi confirms it went through — finalize on our side exactly like a
+      // normal completion would, instead of discarding a real payment.
+      await store().updatePayment(payment.id, { txid, status: 'completed' });
+      await store().updateRide(payment.rideId, {
+        paymentId: payment.id,
+        txid,
+        paymentStatus: 'completed',
+      });
+      logger.info('[Payment] recovered as completed', { paymentId: payment.id });
+      return;
+    }
+  } catch (err) {
+    logger.warn('[Payment] recovery status check failed', {
+      paymentId: payment.id,
+      error: (err as Error).message,
+    });
+  }
+  await releaseHeldPayment(payment.id);
+  await store().updateRide(payment.rideId, { paymentStatus: 'pending' });
 }
 
 // Release a held fare payment back to the passenger (ride cancelled). Failures

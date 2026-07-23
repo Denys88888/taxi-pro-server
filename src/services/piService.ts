@@ -98,7 +98,9 @@ export async function cancelPayment(piPaymentId: string): Promise<PiApiResult> {
 }
 
 // Fetch the current state of a payment from Pi.
-export async function getPiPayment(piPaymentId: string): Promise<PiApiResult> {
+export async function getPiPayment<T = Record<string, unknown>>(
+  piPaymentId: string
+): Promise<PiApiResult<T>> {
   assertConfigured();
-  return piFetch(`/v2/payments/${piPaymentId}`, 'GET', `Key ${env.PI_API_KEY}`);
+  return piFetch<T>(`/v2/payments/${piPaymentId}`, 'GET', `Key ${env.PI_API_KEY}`);
 }

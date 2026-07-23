@@ -30,6 +30,12 @@ export function initFirebase(): boolean {
       });
     }
     firestore = admin.firestore();
+    // Several call sites build patch objects with optional fields left
+    // `undefined` (e.g. driverInfo.vehiclePhoto) — the Admin SDK throws on
+    // that by default ("Cannot use 'undefined' as a Firestore value"),
+    // turning a harmless missing field into a 500. Firestore already drops
+    // undefined keys entirely, which is what every caller here expects.
+    firestore.settings({ ignoreUndefinedProperties: true });
     messaging = admin.messaging();
     enabled = true;
     logger.info('[Firebase] Initialized (Firestore + FCM active).');
