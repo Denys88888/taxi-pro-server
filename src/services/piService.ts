@@ -1,4 +1,5 @@
 import fetch from 'cross-fetch';
+import * as StellarSdk from 'stellar-sdk';
 import { env } from '../config/env';
 import { PI_API_HOST } from '../config/constants';
 import { logger } from '../utils/logger';
@@ -103,4 +104,119 @@ export async function getPiPayment<T = Record<string, unknown>>(
 ): Promise<PiApiResult<T>> {
   assertConfigured();
   return piFetch<T>(`/v2/payments/${piPaymentId}`, 'GET', `Key ${env.PI_API_KEY}`);
+}
+
+// ---------------------------------------------------------------------------
+// App-to-User (A2U) payouts — sending the driver's real share of the fare out
+// of the app's own Pi wallet. This is the only way money ever leaves the app
+// wallet: Pi's client SDK (window.Pi.createPayment) is always User-to-App, so
+// without this, 100% of every fare/tip sits in the developer wallet forever.
+// ---------------------------------------------------------------------------
+
+interface A2UCreateResponse {
+  identifier: string;
+  to_address: string;
+  amount: number;
+}
+
+function assertPayoutConfigured(): void {
+  assertConfigured();
+  if (!env.PI_WALLET_SEED) {
+    const err = new Error('Pi wallet seed not configured — payouts disabled') as Error & {
+      statusCode: number;
+    };
+    err.statusCode = 503;
+    throw err;
+  }
+}
+
+// Ask Pi to create a server-initiated payment to a specific user (uid). Pi
+// returns the destination Stellar address for that user's wallet.
+async function createA2UPayment(
+  uid: string,
+  amount: number,
+  memo: string,
+  metadata: Record<string, unknown>
+): Promise<A2UCreateResponse> {
+  assertConfigured();
+  const { ok, status, data } = await piFetch<A2UCreateResponse>(
+    '/v2/payments',
+    'POST',
+    `Key ${env.PI_API_KEY}`,
+    { payment: { amount, memo, metadata, uid } }
+  );
+  if (!ok) {
+    throw new Error(`Pi A2U payment create failed (${status})`);
+  }
+  return data;
+}
+
+// Build, sign, and submit the actual Stellar transaction moving Pi from the
+// app's wallet to the recipient address Pi gave us, memo-tagged with Pi's
+// payment identifier so Pi can match it back to the payment record.
+async function submitStellarPayment(
+  toAddress: string,
+  amount: number,
+  paymentIdentifier: string
+): Promise<string> {
+  const server = new StellarSdk.Horizon.Server(env.PI_HORIZON_URL);
+  const sourceKeypair = StellarSdk.Keypair.fromSecret(env.PI_WALLET_SEED!);
+  const account = await server.loadAccount(sourceKeypair.publicKey());
+  const tx = new StellarSdk.TransactionBuilder(account, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: env.PI_NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      StellarSdk.Operation.payment({
+        destination: toAddress,
+        asset: StellarSdk.Asset.native(),
+        amount: amount.toFixed(7),
+      })
+    )
+    .addMemo(StellarSdk.Memo.text(paymentIdentifier))
+    .setTimeout(180)
+    .build();
+  tx.sign(sourceKeypair);
+  const result = await server.submitTransaction(tx);
+  return result.hash;
+}
+
+// Full A2U payout flow: create the Pi payment, move the Stellar funds, tell
+// Pi it's done. Returns the txid on success, throws on any failure so the
+// caller can mark the payout 'failed' and retry later without double-paying
+// (each call creates a fresh Pi payment identifier, so retries are safe).
+export async function payoutToUser(
+  uid: string,
+  amount: number,
+  memo: string,
+  metadata: Record<string, unknown>
+): Promise<{ piPaymentId: string; txid: string }> {
+  assertPayoutConfigured();
+  const created = await createA2UPayment(uid, amount, memo, metadata);
+  const approveResult = await piFetch(
+    `/v2/payments/${created.identifier}/approve`,
+    'POST',
+    `Key ${env.PI_API_KEY}`
+  );
+  if (!approveResult.ok) {
+    throw new Error(`Pi A2U payment approve failed (${approveResult.status})`);
+  }
+  const txid = await submitStellarPayment(created.to_address, amount, created.identifier);
+  const completeResult = await piFetch(
+    `/v2/payments/${created.identifier}/complete`,
+    'POST',
+    `Key ${env.PI_API_KEY}`,
+    { txid }
+  );
+  if (!completeResult.ok) {
+    logger.error('[Pi] A2U complete call failed after real Stellar transfer', {
+      piPaymentId: created.identifier,
+      txid,
+      status: completeResult.status,
+    });
+    // The transfer already happened on-chain — surface the txid so the caller
+    // can still record it, even though Pi's own bookkeeping call failed.
+    throw Object.assign(new Error('Pi A2U complete failed'), { txid, piPaymentId: created.identifier });
+  }
+  return { piPaymentId: created.identifier, txid };
 }

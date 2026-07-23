@@ -13,6 +13,12 @@ const schema = z.object({
     .min(32, 'JWT_SECRET must be at least 32 characters')
     .default('dev-only-insecure-secret-change-me-0123456789abcdef'),
   PI_API_KEY: z.string().optional(),
+  // Stellar secret seed (starts with "S...") for the app's own Pi wallet — the
+  // same wallet Pi's U2A payments deposit into. Required only for driver payouts
+  // (App-to-User transfers); everything else degrades gracefully without it.
+  PI_WALLET_SEED: z.string().optional(),
+  PI_HORIZON_URL: z.string().default('https://api.mainnet.minepi.com'),
+  PI_NETWORK_PASSPHRASE: z.string().default('Pi Network'),
   PI_SANDBOX: z
     .string()
     .default('true')
@@ -53,4 +59,7 @@ if (env.isProd && env.JWT_SECRET.startsWith('dev-only-insecure')) {
 }
 if (!env.PI_API_KEY) {
   logger.warn('PI_API_KEY is not set — Pi payment endpoints will return 503.');
+}
+if (!env.PI_WALLET_SEED) {
+  logger.warn('PI_WALLET_SEED is not set — driver payouts (A2U) will be skipped; funds stay in the app wallet.');
 }

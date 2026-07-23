@@ -5,11 +5,13 @@ import {
   completePayment as piComplete,
   cancelPayment as piCancel,
   getPiPayment,
+  payoutToUser,
 } from '../services/piService';
+import { env } from '../config/env';
 import { sendToUser } from '../websocket/broadcast';
 import { genId, nowIso, round } from '../utils/helpers';
 import { logger } from '../utils/logger';
-import type { Payment } from '../types';
+import type { Payment, Ride } from '../types';
 
 // POST /api/payments — create a payment record before Pi.createPayment.
 // type 'ride' (default): the fare, escrowed (pending → held → completed).
@@ -168,17 +170,56 @@ export async function completePayment(req: Request, res: Response): Promise<void
           status: 'tip_received',
           data: { tipAmount: payment.amount },
         });
+        void payoutDriver(updated, 'tip', payment.amount);
       }
     } else {
-      await store().updateRide(payment.rideId, {
+      const updated = await store().updateRide(payment.rideId, {
         paymentId: payment.id,
         txid,
         paymentStatus: 'completed',
       });
+      if (updated?.driverId) {
+        void payoutDriver(updated, 'fare', updated.driverEarnings);
+      }
     }
   }
   logger.info('[Payment] complete', { paymentId: payment.id, type: payment.type, ok: result.ok });
   res.status(result.ok ? 200 : 502).json({ success: result.ok, txid, status: result.status });
+}
+
+// Send the driver their real share of a fare or tip out of the app's Pi
+// wallet (App-to-User). Runs after the response to the passenger has already
+// been sent — the passenger's payment is complete regardless of payout
+// outcome, so this never blocks or fails their request. Without
+// PI_WALLET_SEED configured, this silently no-ops (logged once at startup);
+// funds simply stay queued as 'pending' until an operator backfills them.
+async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: number): Promise<void> {
+  if (!env.PI_WALLET_SEED || !ride.driverId || amount <= 0) return;
+  const statusField = kind === 'fare' ? 'driverPayoutStatus' : 'tipPayoutStatus';
+  const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
+  try {
+    const { txid } = await payoutToUser(
+      ride.driverId,
+      amount,
+      `Taxi Pro ${kind} payout, ride ${ride.id}`,
+      { rideId: ride.id, kind }
+    );
+    await store().updateRide(ride.id, { [statusField]: 'completed', [txidField]: txid });
+    logger.info('[Payout] driver paid', { rideId: ride.id, driverId: ride.driverId, kind, amount, txid });
+  } catch (err) {
+    const txidFromPartialFailure = (err as { txid?: string }).txid;
+    await store().updateRide(ride.id, {
+      [statusField]: 'failed',
+      ...(txidFromPartialFailure ? { [txidField]: txidFromPartialFailure } : {}),
+    });
+    logger.error('[Payout] driver payout failed', {
+      rideId: ride.id,
+      driverId: ride.driverId,
+      kind,
+      amount,
+      error: (err as Error).message,
+    });
+  }
 }
 
 // A held (approved) fare payment whose completion never landed on our side —
