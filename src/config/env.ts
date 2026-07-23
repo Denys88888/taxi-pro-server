@@ -17,8 +17,11 @@ const schema = z.object({
   // same wallet Pi's U2A payments deposit into. Required only for driver payouts
   // (App-to-User transfers); everything else degrades gracefully without it.
   PI_WALLET_SEED: z.string().optional(),
-  PI_HORIZON_URL: z.string().default('https://api.mainnet.minepi.com'),
-  PI_NETWORK_PASSPHRASE: z.string().default('Pi Network'),
+  // Left unset by default — derived from PI_SANDBOX below so testnet/mainnet
+  // can never be mismatched by a stale env var. Only set these explicitly to
+  // override the derived value.
+  PI_HORIZON_URL: z.string().optional(),
+  PI_NETWORK_PASSPHRASE: z.string().optional(),
   PI_SANDBOX: z
     .string()
     .default('true')
@@ -51,6 +54,12 @@ export const env = {
   corsOrigins: raw.CORS_ORIGINS.split(',')
     .map((o) => o.trim())
     .filter(Boolean),
+  // Stellar network to submit A2U payouts on — must match whichever network
+  // PI_SANDBOX says the Pi client SDK is using, so payouts never target the
+  // wrong chain. Explicit PI_HORIZON_URL/PI_NETWORK_PASSPHRASE env vars win.
+  PI_HORIZON_URL:
+    raw.PI_HORIZON_URL ?? (raw.PI_SANDBOX ? 'https://api.testnet.minepi.com' : 'https://api.mainnet.minepi.com'),
+  PI_NETWORK_PASSPHRASE: raw.PI_NETWORK_PASSPHRASE ?? (raw.PI_SANDBOX ? 'Pi Testnet' : 'Pi Network'),
 };
 
 // Guardrails: warn loudly if running in production with insecure defaults.
