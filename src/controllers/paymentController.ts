@@ -48,10 +48,16 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
         res.status(409).json({ error: 'Payment already completed' });
         return;
       }
-    } else if (existing && !['failed', 'cancelled'].includes(existing.status)) {
+    } else if (existing && existing.status !== 'created' && !['failed', 'cancelled'].includes(existing.status)) {
       res.status(409).json({ error: 'Payment already in progress' });
       return;
     }
+    // A payment record in 'created' means our backend made it but the client
+    // never got as far as opening the Pi payment sheet (app closed, network
+    // drop, or — as seen in practice — a stale PWA bundle whose retry loop
+    // kept hitting this exact 409 forever). Nothing on Pi's side was ever
+    // touched for it (no escrow hold, nothing to double-charge), so it's
+    // safe to just let a fresh attempt through instead of blocking forever.
   }
   if (type !== 'tip' && !['assigned', 'arrived', 'in_progress', 'completed'].includes(ride.status)) {
     res.status(409).json({ error: 'Ride not ready for payment' });
