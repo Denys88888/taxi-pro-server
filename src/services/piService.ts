@@ -170,8 +170,23 @@ async function submitStellarPayment(
       `Stellar loadAccount failed for ${sourceKeypair.publicKey()}: ${horizonData ? JSON.stringify(horizonData) : (err as Error).message}`
     );
   }
+  // The hardcoded network-minimum BASE_FEE (100 stroops) was rejected with
+  // tx_insufficient_fee — ask Horizon for the fee current network conditions
+  // actually require, with a safety multiplier for any last-second bump
+  // between the fetch and submission.
+  let fee: string;
+  try {
+    const stats = await server.feeStats();
+    const suggested = Math.max(
+      Number(stats.fee_charged.p60 ?? stats.fee_charged.mode),
+      Number(StellarSdk.BASE_FEE)
+    );
+    fee = String(Math.ceil(suggested * 2));
+  } catch {
+    fee = String(Number(StellarSdk.BASE_FEE) * 10);
+  }
   const tx = new StellarSdk.TransactionBuilder(account, {
-    fee: StellarSdk.BASE_FEE,
+    fee,
     networkPassphrase: env.PI_NETWORK_PASSPHRASE,
   })
     .addOperation(
