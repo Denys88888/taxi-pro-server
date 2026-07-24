@@ -185,6 +185,12 @@ export async function completePayment(req: Request, res: Response): Promise<void
         paymentStatus: 'completed',
       });
       if (updated?.driverId) {
+        sendToUser(updated.driverId, {
+          type: 'ride_status_update',
+          rideId: updated.id,
+          status: 'payment_received',
+          data: { amount: updated.driverEarnings },
+        });
         void payoutDriver(updated, 'fare', updated.driverEarnings);
       }
     }
@@ -265,11 +271,20 @@ export async function recoverStalePayment(payment: Payment): Promise<void> {
       // Pi confirms it went through — finalize on our side exactly like a
       // normal completion would, instead of discarding a real payment.
       await store().updatePayment(payment.id, { txid, status: 'completed' });
-      await store().updateRide(payment.rideId, {
+      const updated = await store().updateRide(payment.rideId, {
         paymentId: payment.id,
         txid,
         paymentStatus: 'completed',
       });
+      if (updated?.driverId) {
+        sendToUser(updated.driverId, {
+          type: 'ride_status_update',
+          rideId: updated.id,
+          status: 'payment_received',
+          data: { amount: updated.driverEarnings },
+        });
+        void payoutDriver(updated, 'fare', updated.driverEarnings);
+      }
       logger.info('[Payment] recovered as completed', { paymentId: payment.id });
       return;
     }
