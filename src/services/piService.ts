@@ -161,7 +161,15 @@ async function submitStellarPayment(
 ): Promise<string> {
   const server = new StellarSdk.Horizon.Server(env.PI_HORIZON_URL);
   const sourceKeypair = StellarSdk.Keypair.fromSecret(env.PI_WALLET_SEED!);
-  const account = await server.loadAccount(sourceKeypair.publicKey());
+  let account;
+  try {
+    account = await server.loadAccount(sourceKeypair.publicKey());
+  } catch (err) {
+    const horizonData = (err as { response?: { data?: unknown } }).response?.data;
+    throw new Error(
+      `Stellar loadAccount failed for ${sourceKeypair.publicKey()}: ${horizonData ? JSON.stringify(horizonData) : (err as Error).message}`
+    );
+  }
   const tx = new StellarSdk.TransactionBuilder(account, {
     fee: StellarSdk.BASE_FEE,
     networkPassphrase: env.PI_NETWORK_PASSPHRASE,
@@ -177,8 +185,19 @@ async function submitStellarPayment(
     .setTimeout(180)
     .build();
   tx.sign(sourceKeypair);
-  const result = await server.submitTransaction(tx);
-  return result.hash;
+  try {
+    const result = await server.submitTransaction(tx);
+    return result.hash;
+  } catch (err) {
+    // Horizon's real rejection reason (e.g. destination account doesn't
+    // exist, underfunded source, bad sequence number) lives in
+    // response.data.extras — the raw error's top-level message is just the
+    // generic "Request failed with status code 400".
+    const horizonData = (err as { response?: { data?: unknown } }).response?.data;
+    throw new Error(
+      `Stellar submitTransaction failed: ${horizonData ? JSON.stringify(horizonData) : (err as Error).message}`
+    );
+  }
 }
 
 // Full A2U payout flow: create the Pi payment, move the Stellar funds, tell
