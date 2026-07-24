@@ -192,18 +192,11 @@ export async function payoutToUser(
   metadata: Record<string, unknown>
 ): Promise<{ piPaymentId: string; txid: string }> {
   assertPayoutConfigured();
+  // Unlike U2A payments, A2U payments are approved by Pi automatically at
+  // creation time (confirmed via Pi's own error: calling /approve on one
+  // returns 400 "already_approved" — there's no separate approval step for
+  // the app to perform here). Go straight to the Stellar transfer.
   const created = await createA2UPayment(uid, amount, memo, metadata);
-  const approveResult = await piFetch(
-    `/v2/payments/${created.identifier}/approve`,
-    'POST',
-    `Key ${env.PI_API_KEY}`
-  );
-  if (!approveResult.ok) {
-    throw Object.assign(
-      new Error(`Pi A2U payment approve failed (${approveResult.status}): ${JSON.stringify(approveResult.data)}`),
-      { piPaymentId: created.identifier }
-    );
-  }
   const txid = await submitStellarPayment(created.to_address, amount, created.identifier);
   const completeResult = await piFetch(
     `/v2/payments/${created.identifier}/complete`,
