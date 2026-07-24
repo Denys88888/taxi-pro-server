@@ -13,7 +13,7 @@ import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty } from '../type
 // POST /api/rides — create a ride request (server computes distance + fare).
 // Supports multi-stop, scheduled (future dispatch) and negotiable (inDriver) rides.
 export async function createRide(req: Request, res: Response): Promise<void> {
-  const { pickup, destination, vehicleType, stops, scheduledAt, negotiable, offeredFare } =
+  const { pickup, destination, vehicleType, stops, scheduledAt, negotiable, offeredFare, note } =
     req.body as {
       pickup: GeoPoint;
       destination: GeoPoint;
@@ -22,6 +22,7 @@ export async function createRide(req: Request, res: Response): Promise<void> {
       scheduledAt?: string;
       negotiable?: boolean;
       offeredFare?: number;
+      note?: string;
     };
   // One active ride per passenger: reject if they already have a non-terminal
   // ride, so the driver pool and the passenger's own tracking stay unambiguous.
@@ -69,6 +70,7 @@ export async function createRide(req: Request, res: Response): Promise<void> {
     pickup,
     destination,
     ...(stops && stops.length ? { stops } : {}),
+    ...(note && note.trim() ? { note: note.trim() } : {}),
     vehicleType,
     distanceKm,
     estimatedDurationMin: durationMin,

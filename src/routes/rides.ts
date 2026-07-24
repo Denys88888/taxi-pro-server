@@ -36,6 +36,7 @@ const createSchema = z.object({
   scheduledAt: z.string().datetime().optional(),
   negotiable: z.boolean().optional(),
   offeredFare: z.number().positive().max(10000).optional(),
+  note: z.string().max(200).optional(),
 });
 
 const offerSchema = z.object({

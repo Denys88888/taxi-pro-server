@@ -101,6 +101,9 @@ export interface Ride {
   destination: GeoPoint;
   // Optional intermediate stops (multi-stop rides), in visiting order.
   stops?: GeoPoint[];
+  // Free-text note from the passenger for the driver (e.g. "large trunk
+  // needed", "child seat required") — shown before/after accepting.
+  note?: string;
   vehicleType: VehicleType;
   distanceKm: number;
   estimatedDurationMin: number;

@@ -105,11 +105,13 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         minFare: settings.minFare,
         baseFarePerKm: settings.baseFarePerKm,
       });
+      const note = typeof msg.note === 'string' ? msg.note.trim().slice(0, 200) : '';
       const ride: Ride = {
         id: genId('ride'),
         passengerId: uid,
         pickup,
         destination,
+        ...(note ? { note } : {}),
         vehicleType: v,
         distanceKm: Math.round(distanceKm * 100) / 100,
         estimatedDurationMin: durationMin,

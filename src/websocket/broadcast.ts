@@ -64,16 +64,26 @@ export function broadcast(payload: unknown, role?: Role): void {
   }
 }
 
-// Offer a ride only to online drivers registered for that exact vehicle
-// class — an economy-registered driver must never be able to pick up a
-// business request (and vice versa). Plain role-based broadcast() can't
-// express this since it has no notion of vehicle class.
+// A comfort/business/xl driver's car is strictly as good as or better than
+// an economy request, so they can serve it too — only an economy-registered
+// driver is capped to economy-only requests. Comfort/business/xl requests
+// stay exact-match (a comfort passenger paying for comfort shouldn't get an
+// economy driver's car, and xl specifically needs the extra seats a
+// business sedan doesn't have).
+function canServe(driverType: VehicleType, requestedType: VehicleType): boolean {
+  return driverType === requestedType || requestedType === 'economy';
+}
+
+// Offer a ride only to online drivers registered for a vehicle class that
+// can actually serve it — an economy-registered driver must never be able
+// to pick up a business/comfort/xl request. Plain role-based broadcast()
+// can't express this since it has no notion of vehicle class.
 export function broadcastToDriversOfType(payload: unknown, vehicleType: VehicleType): void {
   const msg = JSON.stringify(payload);
   for (const ws of userSockets.values()) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (ws.role !== 'driver') continue;
-    if (ws.vehicleType !== vehicleType) continue;
+    if (!ws.vehicleType || !canServe(ws.vehicleType, vehicleType)) continue;
     ws.send(msg);
   }
 }
