@@ -199,7 +199,10 @@ export async function payoutToUser(
     `Key ${env.PI_API_KEY}`
   );
   if (!approveResult.ok) {
-    throw new Error(`Pi A2U payment approve failed (${approveResult.status})`);
+    throw Object.assign(
+      new Error(`Pi A2U payment approve failed (${approveResult.status}): ${JSON.stringify(approveResult.data)}`),
+      { piPaymentId: created.identifier }
+    );
   }
   const txid = await submitStellarPayment(created.to_address, amount, created.identifier);
   const completeResult = await piFetch(

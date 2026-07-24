@@ -114,10 +114,15 @@ export interface Ride {
   driverPayoutStatus?: 'pending' | 'completed' | 'failed';
   driverPayoutTxid?: string;
   driverPayoutError?: string;
+  // Pi's payment identifier for a failed attempt — lets an operator cancel
+  // the stuck Pi-side payment (via POST /api/admin/pi-payments/:id/cancel)
+  // without having to parse it back out of the "ongoing_payment_found" error.
+  driverPayoutPiId?: string;
   // A2U payout of a tip (100% to the driver, no platform fee).
   tipPayoutStatus?: 'pending' | 'completed' | 'failed';
   tipPayoutTxid?: string;
   tipPayoutError?: string;
+  tipPayoutPiId?: string;
   status: RideStatus;
   // Scheduled rides: ISO time the ride should be dispatched. Absent = immediate.
   scheduledAt?: string;

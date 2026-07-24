@@ -220,11 +220,14 @@ export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: num
     logger.info('[Payout] driver paid', { rideId: ride.id, driverId: ride.driverId, kind, amount, txid });
   } catch (err) {
     const txidFromPartialFailure = (err as { txid?: string }).txid;
+    const piPaymentIdFromFailure = (err as { piPaymentId?: string }).piPaymentId;
     const errorField = kind === 'fare' ? 'driverPayoutError' : 'tipPayoutError';
+    const piIdField = kind === 'fare' ? 'driverPayoutPiId' : 'tipPayoutPiId';
     await store().updateRide(ride.id, {
       [statusField]: 'failed',
       [errorField]: (err as Error).message,
       ...(txidFromPartialFailure ? { [txidField]: txidFromPartialFailure } : {}),
+      ...(piPaymentIdFromFailure ? { [piIdField]: piPaymentIdFromFailure } : {}),
     });
     logger.error('[Payout] driver payout failed', {
       rideId: ride.id,
