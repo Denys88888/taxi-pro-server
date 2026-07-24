@@ -197,6 +197,18 @@ export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: num
   if (!env.PI_WALLET_SEED || !ride.driverId || amount <= 0) return;
   const statusField = kind === 'fare' ? 'driverPayoutStatus' : 'tipPayoutStatus';
   const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
+  // Claim the payout before doing any Pi API work: a duplicate completePayment
+  // call (retry, or the double-request race this replaced) must not fire a
+  // second concurrent A2U attempt — Pi itself rejects overlapping A2U payments
+  // to the same user with "ongoing_payment_found", but by then the first
+  // request may already be mid-flight, so check-then-act on our own record
+  // first to avoid ever reaching Pi twice for the same payout.
+  const fresh = await store().getRide(ride.id);
+  if (fresh?.[statusField] === 'pending' || fresh?.[statusField] === 'completed') {
+    logger.warn('[Payout] skipped duplicate payout attempt', { rideId: ride.id, kind, status: fresh[statusField] });
+    return;
+  }
+  await store().updateRide(ride.id, { [statusField]: 'pending' });
   try {
     const { txid } = await payoutToUser(
       ride.driverId,

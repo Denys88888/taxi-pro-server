@@ -3,6 +3,7 @@ import { store } from '../models';
 import { round } from '../utils/helpers';
 import { sendToUser, closeUserSocket } from '../websocket/broadcast';
 import { payoutDriver } from './paymentController';
+import { cancelPayment as piCancelPayment } from '../services/piService';
 import type { Settings, Role, RideStatus } from '../types';
 
 const ROLES: Role[] = ['passenger', 'driver', 'admin'];
@@ -36,6 +37,16 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
     driverPayoutTxid: updated?.driverPayoutTxid,
     driverPayoutError: updated?.driverPayoutError,
   });
+}
+
+// POST /api/admin/pi-payments/:identifier/cancel — cancel a Pi payment stuck
+// in 'approved' (never completed) that's blocking new A2U payouts to the
+// same user (Pi rejects a second A2U payment with "ongoing_payment_found"
+// until the first is resolved). Manual escape hatch — this is not something
+// the normal payout flow ever needs on the happy path.
+export async function cancelPiPayment(req: Request, res: Response): Promise<void> {
+  const result = await piCancelPayment(req.params.identifier);
+  res.status(result.ok ? 200 : 502).json({ success: result.ok, status: result.status, data: result.data });
 }
 
 // GET /api/admin/stats — dashboard summary cards.
