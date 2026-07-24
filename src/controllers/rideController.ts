@@ -36,6 +36,10 @@ export async function createRide(req: Request, res: Response): Promise<void> {
   }
 
   const settings = await store().getSettings();
+  if (settings.maintenanceMode) {
+    res.status(503).json({ error: 'Ordering is temporarily disabled for maintenance', code: 'MAINTENANCE' });
+    return;
+  }
   // Distance follows the full path (pickup → stops… → destination) along the
   // road network; haversine is only the offline fallback inside getRouteInfo.
   const path = [pickup, ...(stops ?? []), destination];

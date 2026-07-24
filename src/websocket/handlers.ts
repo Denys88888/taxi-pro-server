@@ -56,6 +56,17 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Not a registered driver', code: 'NOT_DRIVER' });
         return;
       }
+      // Only enforce once the driver has actually been rated a few times —
+      // a brand-new driver's default rating must never block their first rides.
+      const settings = await store().getSettings();
+      if ((user.ratingCount ?? 0) >= 3 && user.rating < settings.minDriverRating) {
+        send(ws, {
+          type: 'error',
+          message: 'Your rating is below the minimum required to go online',
+          code: 'RATING_TOO_LOW',
+        });
+        return;
+      }
       const resolvedVehicleType = v ?? user.driverInfo.vehicleType;
       await store().updateUser(uid, {
         driverInfo: {
@@ -89,6 +100,10 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       const destination = geo.parse(msg.destination) as GeoPoint;
       const v = vehicle.parse(msg.vehicleType);
       const settings = await store().getSettings();
+      if (settings.maintenanceMode) {
+        send(ws, { type: 'error', message: 'Ordering is temporarily disabled for maintenance', code: 'MAINTENANCE' });
+        return;
+      }
       // Real road distance/duration (haversine only as offline fallback).
       const [{ distanceKm, durationMin }, surge] = await Promise.all([
         getRouteInfo([pickup, destination]),

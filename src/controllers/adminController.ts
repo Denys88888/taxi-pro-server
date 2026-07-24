@@ -226,7 +226,9 @@ export async function listReports(req: Request, res: Response): Promise<void> {
   res.json({ reports });
 }
 
-// PATCH /api/admin/reports/:id — resolve or dismiss a report.
+// PATCH /api/admin/reports/:id — resolve or dismiss a report. Resolving one
+// (i.e. the complaint was legitimate) counts toward that user's auto-block
+// threshold — dismissed reports never count, since they were invalid.
 export async function resolveReport(req: Request, res: Response): Promise<void> {
   const { status } = req.body as { status: 'resolved' | 'dismissed' };
   const updated = await store().updateReport(req.params.id, {
@@ -236,6 +238,21 @@ export async function resolveReport(req: Request, res: Response): Promise<void> 
   if (!updated) {
     res.status(404).json({ error: 'Report not found' });
     return;
+  }
+  if (status === 'resolved') {
+    const settings = await store().getSettings();
+    const resolved = await store().listReports('resolved');
+    const strikeCount = resolved.filter((r) => r.reportedId === updated.reportedId).length;
+    if (strikeCount >= settings.autoBlockThreshold) {
+      const target = await store().getUser(updated.reportedId);
+      if (target && !target.isBlocked) {
+        await store().updateUser(updated.reportedId, {
+          isBlocked: true,
+          blockReason: `Auto-blocked: ${strikeCount} resolved reports`,
+        });
+        closeUserSocket(updated.reportedId, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+      }
+    }
   }
   res.json(updated);
 }

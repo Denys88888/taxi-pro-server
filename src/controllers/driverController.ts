@@ -86,6 +86,17 @@ export async function goOnline(req: Request, res: Response): Promise<void> {
     res.status(403).json({ error: 'Driver not verified' });
     return;
   }
+  const settings = await store().getSettings();
+  if (settings.maintenanceMode) {
+    res.status(503).json({ error: 'Ordering is temporarily disabled for maintenance', code: 'MAINTENANCE' });
+    return;
+  }
+  // Only enforce once the driver has actually been rated a few times — a
+  // brand-new driver's default rating must never block their first rides.
+  if ((user.ratingCount ?? 0) >= 3 && user.rating < settings.minDriverRating) {
+    res.status(403).json({ error: 'Rating below the minimum required to go online', code: 'RATING_TOO_LOW' });
+    return;
+  }
   const body = req.body as { lat?: number; lng?: number };
   const lastLocation =
     body.lat !== undefined && body.lng !== undefined
