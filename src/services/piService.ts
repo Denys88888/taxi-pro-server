@@ -146,7 +146,7 @@ async function createA2UPayment(
     { payment: { amount, memo, metadata, uid } }
   );
   if (!ok) {
-    throw new Error(`Pi A2U payment create failed (${status})`);
+    throw new Error(`Pi A2U payment create failed (${status}): ${JSON.stringify(data)}`);
   }
   return data;
 }
