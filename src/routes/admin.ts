@@ -17,6 +17,7 @@ import {
   verifyDriver,
   listDrivers,
   getAnalytics,
+  retryRidePayout,
 } from '../controllers/adminController';
 
 const router = Router();
@@ -55,6 +56,7 @@ router.get('/stats', asyncHandler(getStats));
 router.get('/users', asyncHandler(listUsers));
 router.patch('/users/:id', validate(blockSchema), asyncHandler(updateUserBlock));
 router.get('/rides', asyncHandler(listAllRides));
+router.post('/rides/:id/retry-payout', asyncHandler(retryRidePayout));
 router.get('/reports', asyncHandler(listReports));
 router.patch('/reports/:id', validate(resolveSchema), asyncHandler(resolveReport));
 router.get('/settings', asyncHandler(getSettings));

@@ -193,7 +193,7 @@ export async function completePayment(req: Request, res: Response): Promise<void
 // outcome, so this never blocks or fails their request. Without
 // PI_WALLET_SEED configured, this silently no-ops (logged once at startup);
 // funds simply stay queued as 'pending' until an operator backfills them.
-async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: number): Promise<void> {
+export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: number): Promise<void> {
   if (!env.PI_WALLET_SEED || !ride.driverId || amount <= 0) return;
   const statusField = kind === 'fare' ? 'driverPayoutStatus' : 'tipPayoutStatus';
   const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
@@ -208,8 +208,10 @@ async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: number): P
     logger.info('[Payout] driver paid', { rideId: ride.id, driverId: ride.driverId, kind, amount, txid });
   } catch (err) {
     const txidFromPartialFailure = (err as { txid?: string }).txid;
+    const errorField = kind === 'fare' ? 'driverPayoutError' : 'tipPayoutError';
     await store().updateRide(ride.id, {
       [statusField]: 'failed',
+      [errorField]: (err as Error).message,
       ...(txidFromPartialFailure ? { [txidField]: txidFromPartialFailure } : {}),
     });
     logger.error('[Payout] driver payout failed', {

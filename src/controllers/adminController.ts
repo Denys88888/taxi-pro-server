@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { store } from '../models';
 import { round } from '../utils/helpers';
 import { sendToUser, closeUserSocket } from '../websocket/broadcast';
+import { payoutDriver } from './paymentController';
 import type { Settings, Role, RideStatus } from '../types';
 
 const ROLES: Role[] = ['passenger', 'driver', 'admin'];
@@ -13,6 +14,29 @@ const RIDE_STATUSES: RideStatus[] = [
   'completed',
   'cancelled',
 ];
+
+// POST /api/admin/rides/:id/retry-payout — manually re-run the driver A2U
+// payout for a ride whose driverPayoutStatus is 'failed' (or absent), and
+// return the outcome (including the error message) directly in the response
+// so it's diagnosable without pulling server logs.
+export async function retryRidePayout(req: Request, res: Response): Promise<void> {
+  const ride = await store().getRide(req.params.id);
+  if (!ride) {
+    res.status(404).json({ error: 'Ride not found' });
+    return;
+  }
+  if (!ride.driverId || ride.paymentStatus !== 'completed') {
+    res.status(409).json({ error: 'Ride has no completed fare payment to pay out' });
+    return;
+  }
+  await payoutDriver(ride, 'fare', ride.driverEarnings);
+  const updated = await store().getRide(req.params.id);
+  res.json({
+    driverPayoutStatus: updated?.driverPayoutStatus,
+    driverPayoutTxid: updated?.driverPayoutTxid,
+    driverPayoutError: updated?.driverPayoutError,
+  });
+}
 
 // GET /api/admin/stats — dashboard summary cards.
 export async function getStats(_req: Request, res: Response): Promise<void> {

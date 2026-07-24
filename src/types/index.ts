@@ -113,9 +113,11 @@ export interface Ride {
   // U2A payment into the app wallet.
   driverPayoutStatus?: 'pending' | 'completed' | 'failed';
   driverPayoutTxid?: string;
+  driverPayoutError?: string;
   // A2U payout of a tip (100% to the driver, no platform fee).
   tipPayoutStatus?: 'pending' | 'completed' | 'failed';
   tipPayoutTxid?: string;
+  tipPayoutError?: string;
   status: RideStatus;
   // Scheduled rides: ISO time the ride should be dispatched. Absent = immediate.
   scheduledAt?: string;
