@@ -87,6 +87,7 @@ describe('fare negotiation (inDriver)', () => {
         model: 'Prius',
         color: 'white',
         number: 'WX 1',
+        vehicleYear: 2019,
         licenseVerified: true,
         applicationStatus: 'approved',
         isOnline: true,

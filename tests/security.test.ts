@@ -22,7 +22,7 @@ async function seedUser(u: Partial<User> & { uid: string; role: User['role'] }):
   } as User);
 }
 const approvedDriverInfo: DriverInfo = {
-  vehicleType: 'economy', brand: 'T', model: 'P', color: 'w', number: 'W1',
+  vehicleType: 'economy', brand: 'T', model: 'P', color: 'w', number: 'W1', vehicleYear: 2018,
   licenseVerified: true, applicationStatus: 'approved', isOnline: true,
 };
 async function seedRide(r: Partial<Ride> & { id: string; passengerId: string }): Promise<void> {

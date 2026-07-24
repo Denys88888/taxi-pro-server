@@ -52,6 +52,12 @@ export interface DriverInfo {
   model: string;
   color: string;
   number: string;
+  // Year the vehicle was made — required (VEHICLE_CLASS_REQUIREMENTS gates
+  // registration by vehicleType) so the fare tier reflects a real difference
+  // in the car, not just a self-reported label.
+  vehicleYear: number;
+  // Seats excluding the driver — only meaningfully checked for 'xl'.
+  seats?: number;
   vehiclePhoto?: string;
   licensePhoto?: string;
   licenseVerified: boolean;

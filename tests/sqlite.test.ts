@@ -88,6 +88,7 @@ describe('SqliteStore', () => {
         model: 'Camry',
         color: 'Silver',
         number: 'WX 1',
+        vehicleYear: 2020,
         licenseVerified: true,
         isOnline: true,
         lastLocation: { lat: 52.23, lng: 21.01 },

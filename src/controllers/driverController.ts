@@ -12,6 +12,8 @@ export async function registerDriver(req: Request, res: Response): Promise<void>
     model: string;
     color: string;
     number: string;
+    vehicleYear: number;
+    seats?: number;
     vehiclePhoto?: string;
     licensePhoto?: string;
   };
@@ -26,6 +28,8 @@ export async function registerDriver(req: Request, res: Response): Promise<void>
     model: body.model,
     color: body.color,
     number: body.number,
+    vehicleYear: body.vehicleYear,
+    seats: body.seats,
     vehiclePhoto: body.vehiclePhoto,
     licensePhoto: body.licensePhoto,
     licenseVerified: false, // pending admin approval

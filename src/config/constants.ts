@@ -26,6 +26,25 @@ export const FARE_TABLE: Record<
 // Cancellation fee after the driver has arrived (fraction of fare).
 export const LATE_CANCELLATION_FEE_PERCENT = 50;
 
+// Minimum requirements to register for each vehicle class — self-reported at
+// signup, checked here so a driver can't just pick "business" for the higher
+// fare with an old/small car; the admin review (which sees the photos) is
+// the final backstop against an outright lie. `minSeats` only applies to xl
+// (a bigger vehicle, not necessarily a newer one).
+export const VEHICLE_CLASS_REQUIREMENTS: Record<
+  VehicleType,
+  { minYear: number; minSeats?: number }
+> = {
+  economy: { minYear: 2000 },
+  comfort: { minYear: currentYearMinus(10) },
+  xl: { minYear: currentYearMinus(12), minSeats: 6 },
+  business: { minYear: currentYearMinus(6) },
+};
+
+function currentYearMinus(years: number): number {
+  return new Date().getFullYear() - years;
+}
+
 // Global defaults, overridable by admins via the settings doc.
 export const DEFAULT_SETTINGS: Settings = {
   platformFeePercent: 10,
