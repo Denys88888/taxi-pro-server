@@ -15,6 +15,7 @@ import adminRoutes from './routes/admin';
 import pushRoutes from './routes/push';
 import userRoutes from './routes/users';
 import reportRoutes from './routes/reports';
+import { store } from './models';
 
 // Build the Express application. Exported separately from the HTTP/WS server so
 // integration tests can exercise it with supertest without opening a socket.
@@ -56,6 +57,19 @@ export function createApp(): Express {
       firebase: isFirebaseEnabled(),
       store: storeKind(),
       time: new Date().toISOString(),
+    });
+  });
+
+  // Public settings (no auth) — the safe branding/contact/maintenance subset
+  // every client needs before login; the full record (fees, fare knobs, etc.)
+  // stays admin-only at /api/admin/settings.
+  app.get('/api/settings', async (_req, res) => {
+    const settings = await store().getSettings();
+    res.json({
+      appName: settings.appName,
+      appLogo: settings.appLogo,
+      contactEmail: settings.contactEmail,
+      maintenanceMode: settings.maintenanceMode,
     });
   });
 
