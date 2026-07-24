@@ -1,10 +1,14 @@
 import { WebSocket } from 'ws';
-import type { Role } from '../types';
+import type { Role, VehicleType } from '../types';
 
 // A WebSocket annotated with the authenticated identity and per-connection state.
 export interface AuthedSocket extends WebSocket {
   userId?: string;
   role?: Role;
+  // Driver's registered vehicle class, kept in sync with driverInfo.vehicleType
+  // on connect and on 'driver_online' — lets ride dispatch filter recipients
+  // without an async store lookup per online driver per ride request.
+  vehicleType?: VehicleType;
   chatId?: string;
   lastMessageAt?: number;
   isAlive?: boolean;
@@ -56,6 +60,20 @@ export function broadcast(payload: unknown, role?: Role): void {
   for (const ws of userSockets.values()) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (role && ws.role !== role) continue;
+    ws.send(msg);
+  }
+}
+
+// Offer a ride only to online drivers registered for that exact vehicle
+// class — an economy-registered driver must never be able to pick up a
+// business request (and vice versa). Plain role-based broadcast() can't
+// express this since it has no notion of vehicle class.
+export function broadcastToDriversOfType(payload: unknown, vehicleType: VehicleType): void {
+  const msg = JSON.stringify(payload);
+  for (const ws of userSockets.values()) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.role !== 'driver') continue;
+    if (ws.vehicleType !== vehicleType) continue;
     ws.send(msg);
   }
 }

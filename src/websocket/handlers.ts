@@ -7,7 +7,7 @@ import { getRouteInfo } from '../services/routingService';
 import { getSurge } from '../services/surgeService';
 import { genId, nowIso } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
-import { send, sendToUser, broadcast, type AuthedSocket } from './broadcast';
+import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
 
 const acceptingRides = new Set<string>();
 import type { Ride, GeoPoint } from '../types';
@@ -56,14 +56,19 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Not a registered driver', code: 'NOT_DRIVER' });
         return;
       }
+      const resolvedVehicleType = v ?? user.driverInfo.vehicleType;
       await store().updateUser(uid, {
         driverInfo: {
           ...user.driverInfo,
           isOnline: true,
-          vehicleType: v ?? user.driverInfo.vehicleType,
+          vehicleType: resolvedVehicleType,
           lastLocation: { lat: p.lat, lng: p.lng },
         },
       });
+      // Keep the live socket's vehicle class in sync so ride dispatch (which
+      // filters by ws.vehicleType, not a DB lookup) offers this driver only
+      // rides matching what they're actually registered/driving as.
+      ws.vehicleType = resolvedVehicleType;
       send(ws, { type: 'ride_status_update', rideId: '', status: 'online', data: {} });
       return;
     }
@@ -116,8 +121,10 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         updatedAt: nowIso(),
       };
       await store().saveRide(ride);
-      // Offer to all online drivers of the requested vehicle type.
-      broadcast({ type: 'ride_available', ride }, 'driver');
+      // Offer only to online drivers registered for this exact vehicle
+      // class — an economy driver must never be able to pick up a business
+      // request (this used to broadcast to every online driver regardless).
+      broadcastToDriversOfType({ type: 'ride_available', ride }, v);
       send(ws, { type: 'ride_status_update', rideId: ride.id, status: 'searching', data: { ride } });
       return;
     }

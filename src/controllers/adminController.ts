@@ -8,6 +8,7 @@ import type { Settings, Role, RideStatus } from '../types';
 
 const ROLES: Role[] = ['passenger', 'driver', 'admin'];
 const RIDE_STATUSES: RideStatus[] = [
+  'scheduled',
   'searching',
   'assigned',
   'arrived',

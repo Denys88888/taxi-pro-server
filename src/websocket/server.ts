@@ -42,6 +42,7 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
     // driver approved after login otherwise keeps a stale 'passenger' role and
     // never receives ride_available broadcasts until they re-login.
     let role = payload.role;
+    let vehicleType;
     try {
       const user = await store().getUser(payload.uid);
       if (user?.isBlocked) {
@@ -50,12 +51,14 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
         return;
       }
       if (user) role = user.role;
+      vehicleType = user?.driverInfo?.vehicleType;
     } catch {
       /* store unavailable — fall through on the valid token */
     }
 
     ws.userId = payload.uid;
     ws.role = role;
+    ws.vehicleType = vehicleType;
     ws.isAlive = true;
     registerSocket(payload.uid, ws);
     send(ws, { type: 'authenticated', userId: payload.uid, role });

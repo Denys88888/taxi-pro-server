@@ -1,5 +1,5 @@
 import { store } from '../models';
-import { broadcast, sendToUser } from '../websocket/broadcast';
+import { broadcastToDriversOfType, sendToUser } from '../websocket/broadcast';
 import { logger } from '../utils/logger';
 
 const SEARCH_TIMEOUT_MS = 15 * 60 * 1000;
@@ -18,7 +18,7 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
         try {
           if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
             const updated = await store().updateRide(ride.id, { status: 'searching' });
-            broadcast({ type: 'ride_available', ride: updated ?? ride }, 'driver');
+            broadcastToDriversOfType({ type: 'ride_available', ride: updated ?? ride }, ride.vehicleType);
             logger.info('[Scheduler] dispatched scheduled ride', { rideId: ride.id });
           }
         } catch (e) {

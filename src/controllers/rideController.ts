@@ -7,7 +7,7 @@ import { releaseHeldPayment } from './paymentController';
 import { genId, nowIso, round } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
 import { LATE_CANCELLATION_FEE_PERCENT } from '../config/constants';
-import { sendToUser, broadcast } from '../websocket/broadcast';
+import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty } from '../types';
 
 // POST /api/rides — create a ride request (server computes distance + fare).
@@ -82,8 +82,10 @@ export async function createRide(req: Request, res: Response): Promise<void> {
     updatedAt: nowIso(),
   };
   await store().saveRide(ride);
-  // Immediate rides are offered to drivers now; scheduled ones dispatch later.
-  if (!isScheduled) broadcast({ type: 'ride_available', ride }, 'driver');
+  // Immediate rides are offered now, only to drivers registered for this
+  // exact vehicle class (an economy driver must never see/accept a business
+  // request); scheduled ones dispatch later via the same filtered path.
+  if (!isScheduled) broadcastToDriversOfType({ type: 'ride_available', ride }, vehicleType);
   res.status(201).json(ride);
 }
 
