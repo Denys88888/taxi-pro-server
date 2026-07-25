@@ -1,24 +1,38 @@
 import { store } from '../models';
 import { broadcastToDriversOfType, sendToUser } from '../websocket/broadcast';
 import { logger } from '../utils/logger';
+import { DRIVER_OFFER_TIMEOUT_MS } from '../config/constants';
 
 const SEARCH_TIMEOUT_MS = 15 * 60 * 1000;
 const ASSIGNED_TIMEOUT_MS = 15 * 60 * 1000;
 const ARRIVED_TIMEOUT_MS = 30 * 60 * 1000;
 const IN_PROGRESS_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
+// Rides that got the first-pass radius broadcast but not yet the extended
+// one — tracked per-process so the scheduler doesn't spam the extended
+// broadcast every tick until someone accepts.
+const expandedRadiusFired = new Set<string>();
+
 export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterval> {
   const tick = async (): Promise<void> => {
     try {
       const now = Date.now();
 
-      // Promote scheduled rides whose time has arrived.
+      const settings = await store().getSettings();
+
+      // Promote scheduled rides whose time has arrived — same distance
+      // filter as immediate rides.
       const scheduled = await store().listAllRides('scheduled');
       for (const ride of scheduled) {
         try {
           if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
             const updated = await store().updateRide(ride.id, { status: 'searching' });
-            broadcastToDriversOfType({ type: 'ride_available', ride: updated ?? ride }, ride.vehicleType);
+            broadcastToDriversOfType(
+              { type: 'ride_available', ride: updated ?? ride },
+              ride.vehicleType,
+              ride.pickup,
+              settings.maxSearchRadiusKm
+            );
             logger.info('[Scheduler] dispatched scheduled ride', { rideId: ride.id });
           }
         } catch (e) {
@@ -26,10 +40,32 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
         }
       }
 
-      // Auto-cancel rides stuck in 'searching' for too long.
+      // Auto-cancel rides stuck in 'searching' for too long, AND expand the
+      // search radius once (after DRIVER_OFFER_TIMEOUT_MS) for those still
+      // waiting — a first-pass radius that turned up no takers doesn't mean
+      // the ride is a lost cause, just that the closest drivers aren't
+      // biting.
       const searching = await store().listAllRides('searching');
       for (const ride of searching) {
         try {
+          const age = now - new Date(ride.createdAt).getTime();
+          if (
+            age > DRIVER_OFFER_TIMEOUT_MS &&
+            !expandedRadiusFired.has(ride.id) &&
+            settings.extendedSearchRadiusKm > settings.maxSearchRadiusKm
+          ) {
+            expandedRadiusFired.add(ride.id);
+            broadcastToDriversOfType(
+              { type: 'ride_available', ride },
+              ride.vehicleType,
+              ride.pickup,
+              settings.extendedSearchRadiusKm
+            );
+            logger.info('[Scheduler] expanded radius for waiting ride', {
+              rideId: ride.id,
+              radiusKm: settings.extendedSearchRadiusKm,
+            });
+          }
           if (now - new Date(ride.createdAt).getTime() > SEARCH_TIMEOUT_MS) {
             const updated = await store().updateRide(ride.id, {
               status: 'cancelled',
@@ -41,6 +77,7 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
               status: 'cancelled',
               ride: updated ?? ride,
             });
+            expandedRadiusFired.delete(ride.id);
             logger.info('[Scheduler] auto-cancelled stale ride', { rideId: ride.id });
           }
         } catch (e) {

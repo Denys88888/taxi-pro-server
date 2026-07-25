@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws';
-import type { Role, VehicleType } from '../types';
+import type { Role, VehicleType, GeoPoint } from '../types';
 
 // A WebSocket annotated with the authenticated identity and per-connection state.
 export interface AuthedSocket extends WebSocket {
@@ -9,6 +9,10 @@ export interface AuthedSocket extends WebSocket {
   // on connect and on 'driver_online' — lets ride dispatch filter recipients
   // without an async store lookup per online driver per ride request.
   vehicleType?: VehicleType;
+  // Driver's last known GPS position; updated on 'driver_online' and every
+  // 'driver_location' ping. Used to filter dispatch by distance to pickup
+  // so a driver 20km away never gets offered a nearby ride.
+  driverLocation?: GeoPoint;
   chatId?: string;
   lastMessageAt?: number;
   isAlive?: boolean;
@@ -74,18 +78,48 @@ function canServe(driverType: VehicleType, requestedType: VehicleType): boolean 
   return driverType === requestedType || requestedType === 'economy';
 }
 
+// Haversine great-circle distance in km. Duplicated inline (also in
+// utils/helpers) so dispatch stays a single self-contained module.
+function distanceKm(a: GeoPoint, b: GeoPoint): number {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 // Offer a ride only to online drivers registered for a vehicle class that
-// can actually serve it — an economy-registered driver must never be able
-// to pick up a business/comfort/xl request. Plain role-based broadcast()
-// can't express this since it has no notion of vehicle class.
-export function broadcastToDriversOfType(payload: unknown, vehicleType: VehicleType): void {
+// can actually serve it AND (if pickup+radius given) within that radius of
+// pickup. Drivers whose location we don't know yet (just came online, no
+// ping yet) are included — better to over-notify than to strand a rider on
+// a stale/missing coord. Returns the uids actually offered, so the
+// scheduler can run an "extended radius" second pass after the offer
+// timeout without re-notifying the same drivers.
+export function broadcastToDriversOfType(
+  payload: unknown,
+  vehicleType: VehicleType,
+  pickup?: GeoPoint,
+  radiusKm?: number,
+  excludeUids?: Set<string>
+): string[] {
   const msg = JSON.stringify(payload);
-  for (const ws of userSockets.values()) {
+  const offered: string[] = [];
+  for (const [uid, ws] of userSockets.entries()) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (ws.role !== 'driver') continue;
     if (!ws.vehicleType || !canServe(ws.vehicleType, vehicleType)) continue;
+    if (excludeUids && excludeUids.has(uid)) continue;
+    if (pickup && radiusKm !== undefined && ws.driverLocation) {
+      if (distanceKm(ws.driverLocation, pickup) > radiusKm) continue;
+    }
     ws.send(msg);
+    offered.push(uid);
   }
+  return offered;
 }
 
 export function onlineUserIds(): string[] {

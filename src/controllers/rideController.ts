@@ -88,10 +88,18 @@ export async function createRide(req: Request, res: Response): Promise<void> {
     updatedAt: nowIso(),
   };
   await store().saveRide(ride);
-  // Immediate rides are offered now, only to drivers registered for this
-  // exact vehicle class (an economy driver must never see/accept a business
-  // request); scheduled ones dispatch later via the same filtered path.
-  if (!isScheduled) broadcastToDriversOfType({ type: 'ride_available', ride }, vehicleType);
+  // Immediate rides are offered now, only to drivers of a compatible
+  // class AND within maxSearchRadiusKm of pickup; scheduled ones dispatch
+  // later via the same filtered path in scheduler.ts. If no driver
+  // accepts within the offer timeout, scheduler.ts expands the radius.
+  if (!isScheduled) {
+    broadcastToDriversOfType(
+      { type: 'ride_available', ride },
+      vehicleType,
+      pickup,
+      settings.maxSearchRadiusKm
+    );
+  }
   res.status(201).json(ride);
 }
 

@@ -76,10 +76,12 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
           lastLocation: { lat: p.lat, lng: p.lng },
         },
       });
-      // Keep the live socket's vehicle class in sync so ride dispatch (which
-      // filters by ws.vehicleType, not a DB lookup) offers this driver only
-      // rides matching what they're actually registered/driving as.
+      // Keep the live socket's vehicle class + location in sync so ride
+      // dispatch (which filters by ws.vehicleType/ws.driverLocation, not a
+      // DB lookup) offers this driver only rides matching what they're
+      // actually registered/driving as AND within radius of pickup.
       ws.vehicleType = resolvedVehicleType;
+      ws.driverLocation = { lat: p.lat, lng: p.lng };
       send(ws, { type: 'ride_status_update', rideId: '', status: 'online', data: {} });
       return;
     }
@@ -138,10 +140,15 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         updatedAt: nowIso(),
       };
       await store().saveRide(ride);
-      // Offer only to online drivers registered for this exact vehicle
-      // class — an economy driver must never be able to pick up a business
-      // request (this used to broadcast to every online driver regardless).
-      broadcastToDriversOfType({ type: 'ride_available', ride }, v);
+      // Offer only to online drivers of a compatible vehicle class AND
+      // within maxSearchRadiusKm of pickup. If no one accepts within the
+      // offer timeout, the scheduler expands to extendedSearchRadiusKm.
+      broadcastToDriversOfType(
+        { type: 'ride_available', ride },
+        v,
+        pickup,
+        settings.maxSearchRadiusKm
+      );
       send(ws, { type: 'ride_status_update', rideId: ride.id, status: 'searching', data: { ride } });
       return;
     }
@@ -256,6 +263,9 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       const lat = Number(msg.lat);
       const lng = Number(msg.lng);
       if (Number.isNaN(lat) || Number.isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+      // Update the live socket first (dispatch reads it synchronously),
+      // then persist to the store.
+      ws.driverLocation = { lat, lng };
       const driver = await store().getUser(uid);
       if (driver?.driverInfo) {
         await store().updateUser(uid, {
