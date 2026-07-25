@@ -60,9 +60,13 @@ export function createApp(): Express {
     });
   });
 
+  // Global rate limit on the API surface.
+  app.use('/api', apiLimiter);
+
   // Public settings (no auth) — the safe branding/contact/maintenance subset
   // every client needs before login; the full record (fees, fare knobs, etc.)
-  // stays admin-only at /api/admin/settings.
+  // stays admin-only at /api/admin/settings. Registered AFTER apiLimiter so
+  // the 60s poll from every open client can't exhaust the shared quota.
   app.get('/api/settings', async (_req, res) => {
     const settings = await store().getSettings();
     res.json({
@@ -72,9 +76,6 @@ export function createApp(): Express {
       maintenanceMode: settings.maintenanceMode,
     });
   });
-
-  // Global rate limit on the API surface.
-  app.use('/api', apiLimiter);
 
   // Feature routers.
   app.use('/api/auth', authRoutes);

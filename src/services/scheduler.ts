@@ -13,6 +13,11 @@ const IN_PROGRESS_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 // broadcast every tick until someone accepts.
 const expandedRadiusFired = new Set<string>();
 
+// UIDs of drivers already offered a given ride in the first (narrow-radius)
+// pass, so the extended-radius pass doesn't re-notify them a second time.
+// Populated by rideController/handlers when they dispatch, read here.
+export const initialOffered = new Map<string, Set<string>>();
+
 export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterval> {
   const tick = async (): Promise<void> => {
     try {
@@ -27,12 +32,13 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
         try {
           if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
             const updated = await store().updateRide(ride.id, { status: 'searching' });
-            broadcastToDriversOfType(
+            const offered = broadcastToDriversOfType(
               { type: 'ride_available', ride: updated ?? ride },
               ride.vehicleType,
               ride.pickup,
               settings.maxSearchRadiusKm
             );
+            initialOffered.set(ride.id, new Set(offered));
             logger.info('[Scheduler] dispatched scheduled ride', { rideId: ride.id });
           }
         } catch (e) {
@@ -46,9 +52,27 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
       // the ride is a lost cause, just that the closest drivers aren't
       // biting.
       const searching = await store().listAllRides('searching');
+      // Purge tracked-expanded ids for rides no longer in 'searching' (took
+      // an offer, was cancelled, whatever) — otherwise this Set grows
+      // unbounded across the process lifetime for every ride that ever
+      // triggered an expansion, since the delete on the auto-cancel branch
+      // only catches the tiny minority of rides that time out entirely.
+      const stillSearching = new Set(searching.map((r) => r.id));
+      for (const id of expandedRadiusFired) {
+        if (!stillSearching.has(id)) expandedRadiusFired.delete(id);
+      }
+      for (const id of initialOffered.keys()) {
+        if (!stillSearching.has(id)) initialOffered.delete(id);
+      }
       for (const ride of searching) {
         try {
-          const age = now - new Date(ride.createdAt).getTime();
+          // Age from updatedAt, not createdAt — for a scheduled ride,
+          // createdAt is when the passenger booked it (could be hours ago),
+          // while updatedAt was refreshed by the promotion to 'searching'.
+          // Using createdAt would immediately trigger the extended broadcast
+          // on the same tick a scheduled ride was promoted (double-notify).
+          const searchStartedAt = new Date(ride.updatedAt ?? ride.createdAt).getTime();
+          const age = now - searchStartedAt;
           if (
             age > DRIVER_OFFER_TIMEOUT_MS &&
             !expandedRadiusFired.has(ride.id) &&
@@ -59,7 +83,8 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
               { type: 'ride_available', ride },
               ride.vehicleType,
               ride.pickup,
-              settings.extendedSearchRadiusKm
+              settings.extendedSearchRadiusKm,
+              initialOffered.get(ride.id)
             );
             logger.info('[Scheduler] expanded radius for waiting ride', {
               rideId: ride.id,

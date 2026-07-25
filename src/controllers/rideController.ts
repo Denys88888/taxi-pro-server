@@ -8,6 +8,7 @@ import { genId, nowIso, round } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
 import { LATE_CANCELLATION_FEE_PERCENT } from '../config/constants';
 import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
+import { initialOffered } from '../services/scheduler';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty } from '../types';
 
 // POST /api/rides — create a ride request (server computes distance + fare).
@@ -93,12 +94,13 @@ export async function createRide(req: Request, res: Response): Promise<void> {
   // later via the same filtered path in scheduler.ts. If no driver
   // accepts within the offer timeout, scheduler.ts expands the radius.
   if (!isScheduled) {
-    broadcastToDriversOfType(
+    const offered = broadcastToDriversOfType(
       { type: 'ride_available', ride },
       vehicleType,
       pickup,
       settings.maxSearchRadiusKm
     );
+    initialOffered.set(ride.id, new Set(offered));
   }
   res.status(201).json(ride);
 }

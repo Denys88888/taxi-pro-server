@@ -8,6 +8,7 @@ import { getSurge } from '../services/surgeService';
 import { genId, nowIso } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
+import { initialOffered } from '../services/scheduler';
 
 const acceptingRides = new Set<string>();
 import type { Ride, GeoPoint } from '../types';
@@ -142,13 +143,15 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       await store().saveRide(ride);
       // Offer only to online drivers of a compatible vehicle class AND
       // within maxSearchRadiusKm of pickup. If no one accepts within the
-      // offer timeout, the scheduler expands to extendedSearchRadiusKm.
-      broadcastToDriversOfType(
+      // offer timeout, the scheduler expands to extendedSearchRadiusKm,
+      // excluding drivers we already offered here (see initialOffered).
+      const offered = broadcastToDriversOfType(
         { type: 'ride_available', ride },
         v,
         pickup,
         settings.maxSearchRadiusKm
       );
+      initialOffered.set(ride.id, new Set(offered));
       send(ws, { type: 'ride_status_update', rideId: ride.id, status: 'searching', data: { ride } });
       return;
     }
