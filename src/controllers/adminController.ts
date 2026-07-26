@@ -269,13 +269,6 @@ export async function updateSettings(req: Request, res: Response): Promise<void>
   res.json(updated);
 }
 
-// GET /api/admin/drivers/pending — drivers awaiting verification.
-export async function pendingDrivers(_req: Request, res: Response): Promise<void> {
-  const users = await store().listUsers();
-  const pending = users.filter((u) => u.driverInfo && !u.driverInfo.licenseVerified);
-  res.json({ drivers: pending });
-}
-
 // POST /api/admin/drivers/:id/verify — approve or reject a driver application.
 export async function verifyDriver(req: Request, res: Response): Promise<void> {
   const { approve } = req.body as { approve: boolean };

@@ -13,6 +13,16 @@ import { genId, nowIso, round } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import type { Payment, Ride } from '../types';
 
+// Payouts currently in-flight this process, keyed `${rideId}:${kind}`. The
+// DB check-then-set in payoutDriver has an await between the read and the
+// write, so two concurrent completePayment calls (Pi SDK firing its
+// completion callback twice, a double-tap that slips the client guard) could
+// both read "not yet paid" and both launch an A2U transfer. This synchronous
+// set is claimed with no await in between, closing that window within the
+// process (the common case on a single Render instance); Pi's own
+// "ongoing_payment_found" rejection remains the cross-process backstop.
+const payoutsInFlight = new Set<string>();
+
 // POST /api/payments — create a payment record before Pi.createPayment.
 // type 'ride' (default): the fare, escrowed (pending → held → completed).
 // type 'tip': a voluntary post-ride tip to the driver (requires amount).
@@ -209,45 +219,55 @@ export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: num
   if (!env.PI_WALLET_SEED || !ride.driverId || amount <= 0) return;
   const statusField = kind === 'fare' ? 'driverPayoutStatus' : 'tipPayoutStatus';
   const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
-  // Claim the payout before doing any Pi API work: a duplicate completePayment
-  // call (retry, or the double-request race this replaced) must not fire a
-  // second concurrent A2U attempt — Pi itself rejects overlapping A2U payments
-  // to the same user with "ongoing_payment_found", but by then the first
-  // request may already be mid-flight, so check-then-act on our own record
-  // first to avoid ever reaching Pi twice for the same payout.
-  const fresh = await store().getRide(ride.id);
-  if (fresh?.[statusField] === 'pending' || fresh?.[statusField] === 'completed') {
-    logger.warn('[Payout] skipped duplicate payout attempt', { rideId: ride.id, kind, status: fresh[statusField] });
+  // Synchronously claim this (rideId, kind) before any await — two concurrent
+  // callers can't both pass has()→add() since there's no yield point between
+  // them, so only the first proceeds to the DB check + Pi transfer below.
+  const claimKey = `${ride.id}:${kind}`;
+  if (payoutsInFlight.has(claimKey)) {
+    logger.warn('[Payout] skipped concurrent payout attempt', { rideId: ride.id, kind });
     return;
   }
-  await store().updateRide(ride.id, { [statusField]: 'pending' });
+  payoutsInFlight.add(claimKey);
   try {
-    const { txid } = await payoutToUser(
-      ride.driverId,
-      amount,
-      `Taxi Pro ${kind} payout, ride ${ride.id}`,
-      { rideId: ride.id, kind }
-    );
-    await store().updateRide(ride.id, { [statusField]: 'completed', [txidField]: txid });
-    logger.info('[Payout] driver paid', { rideId: ride.id, driverId: ride.driverId, kind, amount, txid });
-  } catch (err) {
-    const txidFromPartialFailure = (err as { txid?: string }).txid;
-    const piPaymentIdFromFailure = (err as { piPaymentId?: string }).piPaymentId;
-    const errorField = kind === 'fare' ? 'driverPayoutError' : 'tipPayoutError';
-    const piIdField = kind === 'fare' ? 'driverPayoutPiId' : 'tipPayoutPiId';
-    await store().updateRide(ride.id, {
-      [statusField]: 'failed',
-      [errorField]: (err as Error).message,
-      ...(txidFromPartialFailure ? { [txidField]: txidFromPartialFailure } : {}),
-      ...(piPaymentIdFromFailure ? { [piIdField]: piPaymentIdFromFailure } : {}),
-    });
-    logger.error('[Payout] driver payout failed', {
-      rideId: ride.id,
-      driverId: ride.driverId,
-      kind,
-      amount,
-      error: (err as Error).message,
-    });
+    // Second line of defence across process restarts / prior completed
+    // payouts: our own persisted record. (Pi's "ongoing_payment_found" is
+    // the cross-process backstop for the rare multi-instance case.)
+    const fresh = await store().getRide(ride.id);
+    if (fresh?.[statusField] === 'pending' || fresh?.[statusField] === 'completed') {
+      logger.warn('[Payout] skipped duplicate payout attempt', { rideId: ride.id, kind, status: fresh[statusField] });
+      return;
+    }
+    await store().updateRide(ride.id, { [statusField]: 'pending' });
+    try {
+      const { txid } = await payoutToUser(
+        ride.driverId,
+        amount,
+        `Taxi Pro ${kind} payout, ride ${ride.id}`,
+        { rideId: ride.id, kind }
+      );
+      await store().updateRide(ride.id, { [statusField]: 'completed', [txidField]: txid });
+      logger.info('[Payout] driver paid', { rideId: ride.id, driverId: ride.driverId, kind, amount, txid });
+    } catch (err) {
+      const txidFromPartialFailure = (err as { txid?: string }).txid;
+      const piPaymentIdFromFailure = (err as { piPaymentId?: string }).piPaymentId;
+      const errorField = kind === 'fare' ? 'driverPayoutError' : 'tipPayoutError';
+      const piIdField = kind === 'fare' ? 'driverPayoutPiId' : 'tipPayoutPiId';
+      await store().updateRide(ride.id, {
+        [statusField]: 'failed',
+        [errorField]: (err as Error).message,
+        ...(txidFromPartialFailure ? { [txidField]: txidFromPartialFailure } : {}),
+        ...(piPaymentIdFromFailure ? { [piIdField]: piPaymentIdFromFailure } : {}),
+      });
+      logger.error('[Payout] driver payout failed', {
+        rideId: ride.id,
+        driverId: ride.driverId,
+        kind,
+        amount,
+        error: (err as Error).message,
+      });
+    }
+  } finally {
+    payoutsInFlight.delete(claimKey);
   }
 }
 

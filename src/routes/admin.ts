@@ -13,7 +13,6 @@ import {
   resolveReport,
   getSettings,
   updateSettings,
-  pendingDrivers,
   verifyDriver,
   listDrivers,
   getAnalytics,
@@ -65,7 +64,6 @@ router.get('/settings', asyncHandler(getSettings));
 router.patch('/settings', validate(settingsSchema), asyncHandler(updateSettings));
 router.get('/analytics', asyncHandler(getAnalytics));
 router.get('/drivers', asyncHandler(listDrivers));
-router.get('/drivers/pending', asyncHandler(pendingDrivers));
 router.post('/drivers/:id/verify', validate(verifySchema), asyncHandler(verifyDriver));
 
 export default router;

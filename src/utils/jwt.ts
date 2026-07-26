@@ -33,7 +33,9 @@ export function signShareToken(rideId: string): string {
 
 export function verifyShareToken(token: string): { rideId: string } | null {
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET) as { rideId: string };
+    // Pin the algorithm (matches verifyToken) — never let a caller-chosen
+    // 'alg' header steer verification (algorithm-confusion defence).
+    const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as { rideId: string };
     return decoded.rideId ? { rideId: decoded.rideId } : null;
   } catch {
     return null;
