@@ -8,6 +8,7 @@ import {
   getPayment,
   approvePayment,
   completePayment,
+  cancelIncompletePayment,
 } from '../controllers/paymentController';
 
 const router = Router();
@@ -29,5 +30,6 @@ router.post('/', validate(createSchema), asyncHandler(createPayment));
 router.get('/:id', asyncHandler(getPayment));
 router.post('/:id/approve', validate(approveSchema), asyncHandler(approvePayment));
 router.post('/:id/complete', validate(completeSchema), asyncHandler(completePayment));
+router.post('/:id/cancel', validate(approveSchema), asyncHandler(cancelIncompletePayment));
 
 export default router;

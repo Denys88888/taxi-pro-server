@@ -119,6 +119,40 @@ export async function getPayment(req: Request, res: Response): Promise<void> {
   res.json(payment);
 }
 
+// POST /api/payments/:id/cancel — cancel a Pi payment the passenger left
+// incomplete WITHOUT a txid (created/approved but never submitted to chain,
+// e.g. they backed out of the sheet). The Pi SDK surfaces such a payment via
+// onIncompletePaymentFound and will keep blocking new createPayment calls
+// until it's resolved — completion is impossible (no txid), so cancel is the
+// only way to unstick the user.
+export async function cancelIncompletePayment(req: Request, res: Response): Promise<void> {
+  const { piPaymentId } = req.body as { piPaymentId: string };
+  const payment = await store().getPayment(req.params.id);
+  if (!payment) {
+    res.status(404).json({ error: 'Payment not found' });
+    return;
+  }
+  const ride = await store().getRide(payment.rideId);
+  if (ride && ride.passengerId !== req.user!.uid) {
+    res.status(403).json({ error: 'Not the ride passenger' });
+    return;
+  }
+  // Never cancel a payment we've already finalized — that would be a real
+  // captured transfer, not an abandoned sheet.
+  if (payment.status === 'completed') {
+    res.status(409).json({ error: 'Payment already completed' });
+    return;
+  }
+  const result = await piCancel(piPaymentId);
+  await store().updatePayment(payment.id, { status: 'cancelled' });
+  // A cancelled fare payment must leave the ride re-payable, not stuck.
+  if (payment.type !== 'tip' && ride) {
+    await store().updateRide(payment.rideId, { paymentStatus: 'pending' });
+  }
+  logger.info('[Payment] cancelled incomplete', { paymentId: payment.id, ok: result.ok });
+  res.status(result.ok ? 200 : 502).json({ success: result.ok, status: result.status });
+}
+
 // POST /api/payments/:id/approve — forward approval to the Pi Platform API.
 // For the fare this is the escrow "hold": Pi has reserved the funds but we
 // have not completed the transfer yet.
