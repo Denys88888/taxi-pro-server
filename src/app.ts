@@ -56,7 +56,9 @@ export function createApp(): Express {
   // Swagger UI at /api/docs (no auth, dev-friendly CSP override for this path).
   // Loaded lazily so a missing yaml file doesn't crash the whole server.
   try {
-    const specPath = path.resolve(__dirname, '../../openapi.yaml');
+    // In dev (tsx) __dirname is src/; in compiled dist/ it's dist/. Walk up to the
+    // project root in both cases by looking for openapi.yaml relative to process.cwd().
+    const specPath = path.resolve(process.cwd(), 'openapi.yaml');
     const spec = yaml.load(fs.readFileSync(specPath, 'utf8')) as Record<string, unknown>;
     app.use(
       '/api/docs',
