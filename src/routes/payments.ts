@@ -9,6 +9,7 @@ import {
   approvePayment,
   completePayment,
   cancelIncompletePayment,
+  cancelUnknownPiPayment,
 } from '../controllers/paymentController';
 
 const router = Router();
@@ -27,6 +28,8 @@ const completeSchema = z.object({
 router.use(requireAuth);
 
 router.post('/', validate(createSchema), asyncHandler(createPayment));
+// Literal routes must precede /:id so Express doesn't match 'cancel-unknown-pi' as a payment id.
+router.post('/cancel-unknown-pi', validate(approveSchema), asyncHandler(cancelUnknownPiPayment));
 router.get('/:id', asyncHandler(getPayment));
 router.post('/:id/approve', validate(approveSchema), asyncHandler(approvePayment));
 router.post('/:id/complete', validate(completeSchema), asyncHandler(completePayment));

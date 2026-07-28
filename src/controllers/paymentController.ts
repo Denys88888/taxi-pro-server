@@ -58,6 +58,9 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
         res.status(409).json({ error: 'Payment already completed' });
         return;
       }
+    } else if (existing && existing.status === 'completed') {
+      res.status(409).json({ error: 'Payment already completed' });
+      return;
     } else if (existing && existing.status !== 'created' && !['failed', 'cancelled'].includes(existing.status)) {
       res.status(409).json({ error: 'Payment already in progress' });
       return;
@@ -153,6 +156,19 @@ export async function cancelIncompletePayment(req: Request, res: Response): Prom
   res.status(result.ok ? 200 : 502).json({ success: result.ok, status: result.status });
 }
 
+// POST /api/payments/cancel-unknown-pi — cancel a Pi payment whose metadata
+// lacks our internal paymentId (old SDK version, test payment, or metadata
+// corruption). Without this the Pi SDK keeps surfacing it in
+// onIncompletePaymentFound and blocks all future Pi.createPayment calls.
+export async function cancelUnknownPiPayment(req: Request, res: Response): Promise<void> {
+  const { piPaymentId } = req.body as { piPaymentId: string };
+  const result = await piCancel(piPaymentId);
+  logger.info('[Payment] cancelled unknown Pi payment', { piPaymentId, ok: result.ok });
+  // Return success even if Pi's cancel failed (e.g. already cancelled) — the
+  // goal is just to unblock the SDK, not to guarantee a round-trip.
+  res.status(200).json({ success: true, piStatus: result.status });
+}
+
 // POST /api/payments/:id/approve — forward approval to the Pi Platform API.
 // For the fare this is the escrow "hold": Pi has reserved the funds but we
 // have not completed the transfer yet.
@@ -166,6 +182,16 @@ export async function approvePayment(req: Request, res: Response): Promise<void>
   const ride = await store().getRide(payment.rideId);
   if (ride && ride.passengerId !== req.user!.uid) {
     res.status(403).json({ error: 'Not the ride passenger' });
+    return;
+  }
+  // Idempotency: a retried approval must not overwrite a completed payment.
+  if (payment.status === 'completed') {
+    res.status(200).json({ success: true, status: 'already_completed' });
+    return;
+  }
+  // Same piPaymentId already approved — safe to return success immediately.
+  if (payment.status === 'approved' && payment.piPaymentId === piPaymentId) {
+    res.status(200).json({ success: true, status: 'already_approved' });
     return;
   }
   const result = await piApprove(piPaymentId);
