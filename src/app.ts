@@ -107,6 +107,41 @@ export function createApp(): Express {
     // openapi.yaml not found — skip silently.
   }
 
+  // PiNet metadata endpoint — used by PiNet's backend scraping mode so that
+  // sharing a link in Pi Browser / social media shows a rich preview.
+  // PiNet sends GET /pinet/meta?pathname=<encoded-pathname>; we return a
+  // PiNetMetadataDTO. All fields are optional; we serve a single set for the
+  // whole SPA (the app has no per-page public URLs worth differentiating).
+  app.get('/pinet/meta', (_req, res) => {
+    res.removeHeader('Content-Security-Policy');
+    res.json({
+      title: 'Taxi Pro — Ride-hailing on Pi Network',
+      description:
+        'Book rides and earn Pi — the first ride-hailing app built on Pi Network. Fast, safe, affordable.',
+      openGraph: {
+        type: 'website',
+        title: 'Taxi Pro — Ride-hailing on Pi Network',
+        description:
+          'Book rides and earn Pi — the first ride-hailing app built on Pi Network. Fast, safe, affordable.',
+        images: [
+          {
+            url: 'https://denys88888.github.io/og-image.png',
+            width: 1200,
+            height: 630,
+            alt: 'Taxi Pro — Ride-hailing on Pi Network',
+          },
+        ],
+      },
+      twitter: {
+        card: 'summary_large_image',
+        title: 'Taxi Pro — Ride-hailing on Pi Network',
+        description:
+          'Book rides and earn Pi — the first ride-hailing app built on Pi Network.',
+        images: ['https://denys88888.github.io/og-image.png'],
+      },
+    });
+  });
+
   // Health check (no auth) — surfaces sandbox + storage mode to the frontend.
   app.get('/api/health', (_req, res) => {
     res.json({
