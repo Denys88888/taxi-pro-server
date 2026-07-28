@@ -62,16 +62,21 @@ export async function getRouteInfo(points: GeoPoint[]): Promise<RouteInfo> {
   const cached = cache.get(key);
   if (cached) return cached;
 
-  try {
-    const info = await queryOsrm(points);
-    if (!info) return fallback();
-    if (cache.size > 500) cache.clear();
-    cache.set(key, info);
-    return info;
-  } catch (err) {
-    logger.warn('[routing] OSRM lookup failed, falling back to haversine', {
-      error: (err as Error).message,
-    });
-    return fallback();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const info = await queryOsrm(points);
+      if (info) {
+        if (cache.size > 500) cache.clear();
+        cache.set(key, info);
+        return info;
+      }
+    } catch (err) {
+      logger.warn('[routing] OSRM lookup failed', {
+        attempt,
+        error: (err as Error).message,
+      });
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
+    }
   }
+  return fallback();
 }
