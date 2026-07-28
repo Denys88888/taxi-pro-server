@@ -62,12 +62,12 @@ export function createApp(): Express {
     const spec = yaml.load(fs.readFileSync(specPath, 'utf8')) as Record<string, unknown>;
     app.use(
       '/api/docs',
-      // Swagger UI needs inline scripts; relax CSP only for this sub-path.
+      // Swagger UI v5 uses blob: workers, eval, and inline styles — remove the
+      // global strict CSP for this path only. /api/docs is a dev tool, not an
+      // app surface, so the relaxation is intentional and scoped.
       (_req: express.Request, res: express.Response, next: express.NextFunction) => {
-        res.setHeader(
-          'Content-Security-Policy',
-          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
-        );
+        res.removeHeader('Content-Security-Policy');
+        res.removeHeader('X-Content-Type-Options');
         next();
       },
       swaggerUi.serve,
