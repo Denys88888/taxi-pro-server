@@ -1,0 +1,998 @@
+openapi: 3.0.3
+info:
+  title: Taxi Pro API
+  description: Pi Network ride-hailing backend — REST + WebSocket
+  version: 1.0.0
+  contact:
+    email: 48512425940dd@gmail.com
+
+servers:
+  - url: https://taxi-pro-server.onrender.com
+    description: Production
+  - url: http://localhost:3001
+    description: Local dev
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    GeoPoint:
+      type: object
+      required: [lat, lng]
+      properties:
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lng: { type: number, minimum: -180, maximum: 180 }
+        address: { type: string, maxLength: 300 }
+
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [passenger, driver, admin] }
+        avatar: { type: string }
+        phone: { type: string }
+        preferredLanguage: { type: string }
+        preferredTheme: { type: string, enum: [light, dark, auto] }
+        piUid: { type: string }
+        isBlocked: { type: boolean }
+        driverInfo: { type: object, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    Ride:
+      type: object
+      properties:
+        id: { type: string }
+        passengerId: { type: string }
+        driverId: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [searching, assigned, arrived, in_progress, completed, cancelled]
+        pickup: { $ref: '#/components/schemas/GeoPoint' }
+        destination: { $ref: '#/components/schemas/GeoPoint' }
+        stops: { type: array, items: { $ref: '#/components/schemas/GeoPoint' } }
+        vehicleType: { type: string, enum: [economy, comfort, business, xl] }
+        fareAmount: { type: number }
+        distanceKm: { type: number }
+        durationMin: { type: integer }
+        scheduledAt: { type: string, format: date-time, nullable: true }
+        negotiable: { type: boolean }
+        offeredFare: { type: number, nullable: true }
+        note: { type: string, nullable: true }
+        passengerRating: { type: number, nullable: true }
+        driverRating: { type: number, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    Payment:
+      type: object
+      properties:
+        id: { type: string }
+        rideId: { type: string }
+        userId: { type: string }
+        amount: { type: number }
+        status: { type: string, enum: [created, approved, completed, failed, cancelled] }
+        piPaymentId: { type: string, nullable: true }
+        txid: { type: string, nullable: true }
+        type: { type: string, enum: [ride, tip] }
+        createdAt: { type: string, format: date-time }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        chatId: { type: string }
+        senderId: { type: string }
+        text: { type: string }
+        isTemplate: { type: boolean }
+        createdAt: { type: string, format: date-time }
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      tags: [System]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Server is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  sandbox: { type: boolean }
+                  firebase: { type: boolean }
+                  store: { type: string }
+                  time: { type: string, format: date-time }
+
+  /api/settings:
+    get:
+      tags: [System]
+      summary: Public app settings (no auth)
+      security: []
+      responses:
+        '200':
+          description: Public settings subset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName: { type: string }
+                  appLogo: { type: string }
+                  contactEmail: { type: string }
+                  maintenanceMode: { type: boolean }
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+  /api/auth/pi:
+    post:
+      tags: [Auth]
+      summary: Exchange Pi accessToken for app JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accessToken]
+              properties:
+                accessToken: { type: string }
+      responses:
+        '200':
+          description: JWT issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+        '401':
+          description: Invalid Pi token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/auth/dev:
+    post:
+      tags: [Auth]
+      summary: Dev login (sandbox only)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                role: { type: string, enum: [passenger, driver, admin] }
+      responses:
+        '200':
+          description: Dev JWT issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: '#/components/schemas/User' }
+        '403':
+          description: Dev auth disabled in production
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ── Users ─────────────────────────────────────────────────────────────────
+  /api/users/me:
+    get:
+      tags: [Users]
+      summary: Get current user profile
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+    patch:
+      tags: [Users]
+      summary: Update current user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 60 }
+                phone: { type: string }
+                avatar: { type: string }
+                preferredLanguage: { type: string }
+                preferredTheme: { type: string, enum: [light, dark, auto] }
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+
+  /api/users/me/switch-role:
+    post:
+      tags: [Users]
+      summary: Switch active role (passenger ↔ driver)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [passenger, driver] }
+      responses:
+        '200':
+          description: Role switched
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403':
+          description: Not a verified driver
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/users/me/addresses:
+    get:
+      tags: [Users]
+      summary: Get saved addresses
+      responses:
+        '200':
+          description: Address list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  addresses:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        label: { type: string }
+                        lat: { type: number }
+                        lng: { type: number }
+                        address: { type: string }
+    put:
+      tags: [Users]
+      summary: Replace saved addresses (max 10)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [addresses]
+              properties:
+                addresses:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [label, lat, lng]
+                    properties:
+                      label: { type: string }
+                      lat: { type: number }
+                      lng: { type: number }
+                      address: { type: string }
+      responses:
+        '200':
+          description: Addresses saved
+
+  # ── Rides ─────────────────────────────────────────────────────────────────
+  /api/rides:
+    post:
+      tags: [Rides]
+      summary: Create a new ride request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pickup, destination, vehicleType]
+              properties:
+                pickup: { $ref: '#/components/schemas/GeoPoint' }
+                destination: { $ref: '#/components/schemas/GeoPoint' }
+                vehicleType: { type: string, enum: [economy, comfort, business, xl] }
+                stops: { type: array, maxItems: 5, items: { $ref: '#/components/schemas/GeoPoint' } }
+                scheduledAt: { type: string, format: date-time }
+                negotiable: { type: boolean }
+                offeredFare: { type: number }
+                note: { type: string, maxLength: 200 }
+      responses:
+        '201':
+          description: Ride created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ride' }
+        '429':
+          description: Rate limit exceeded
+    get:
+      tags: [Rides]
+      summary: List rides for current user
+      responses:
+        '200':
+          description: Ride list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rides: { type: array, items: { $ref: '#/components/schemas/Ride' } }
+
+  /api/rides/surge:
+    get:
+      tags: [Rides]
+      summary: Get current surge multiplier and active ride count
+      responses:
+        '200':
+          description: Surge info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  surgeMultiplier: { type: number }
+                  activeRides: { type: integer }
+
+  /api/rides/open:
+    get:
+      tags: [Rides]
+      summary: List open (searching) rides for drivers
+      responses:
+        '200':
+          description: Open rides
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rides: { type: array, items: { $ref: '#/components/schemas/Ride' } }
+
+  /api/rides/heatmap:
+    get:
+      tags: [Rides]
+      summary: Heatmap data (pickup density)
+      responses:
+        '200':
+          description: Heatmap points
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  points: { type: array, items: { type: object } }
+
+  /api/rides/{id}:
+    get:
+      tags: [Rides]
+      summary: Get ride by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Ride
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ride' }
+        '404':
+          description: Not found
+    patch:
+      tags: [Rides]
+      summary: Update ride status or ratings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [searching, assigned, arrived, in_progress, completed, cancelled]
+                passengerRating: { type: number, minimum: 1, maximum: 5 }
+                driverRating: { type: number, minimum: 1, maximum: 5 }
+                passengerReview: { type: string, maxLength: 500 }
+                driverReview: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Updated ride
+
+  /api/rides/{id}/cancel:
+    post:
+      tags: [Rides]
+      summary: Cancel a ride
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 300 }
+      responses:
+        '200':
+          description: Ride cancelled
+
+  /api/rides/{id}/share:
+    post:
+      tags: [Rides]
+      summary: Generate shareable ride link
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Share URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+
+  /api/rides/{id}/offers:
+    post:
+      tags: [Rides]
+      summary: Driver submits a fare offer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { type: number }
+                etaMin: { type: integer }
+      responses:
+        '201':
+          description: Offer submitted
+
+  /api/rides/{id}/offers/accept:
+    post:
+      tags: [Rides]
+      summary: Passenger accepts a driver offer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [driverId]
+              properties:
+                driverId: { type: string }
+      responses:
+        '200':
+          description: Driver assigned
+
+  # ── Drivers ───────────────────────────────────────────────────────────────
+  /api/drivers/register:
+    post:
+      tags: [Drivers]
+      summary: Register as a driver (submit vehicle + license info)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vehicleType, brand, model, color, number, vehicleYear]
+              properties:
+                vehicleType: { type: string, enum: [economy, comfort, business, xl] }
+                brand: { type: string, maxLength: 50 }
+                model: { type: string, maxLength: 50 }
+                color: { type: string, maxLength: 30 }
+                number: { type: string, maxLength: 20 }
+                vehicleYear: { type: integer, minimum: 1980 }
+                seats: { type: integer, minimum: 1, maximum: 20 }
+                vehiclePhoto: { type: string, format: uri }
+                licensePhoto: { type: string, format: uri }
+      responses:
+        '200':
+          description: Registration submitted (pending admin approval)
+
+  /api/drivers/nearby:
+    get:
+      tags: [Drivers]
+      summary: List online drivers near a point
+      parameters:
+        - name: lat
+          in: query
+          schema: { type: number }
+        - name: lng
+          in: query
+          schema: { type: number }
+      responses:
+        '200':
+          description: Nearby drivers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  drivers: { type: array, items: { type: object } }
+
+  /api/drivers/location:
+    post:
+      tags: [Drivers]
+      summary: Update driver GPS position
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lat, lng]
+              properties:
+                lat: { type: number }
+                lng: { type: number }
+      responses:
+        '200':
+          description: Location updated
+
+  /api/drivers/online:
+    post:
+      tags: [Drivers]
+      summary: Set driver status to online
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lat: { type: number }
+                lng: { type: number }
+      responses:
+        '200':
+          description: Now online
+
+  /api/drivers/offline:
+    post:
+      tags: [Drivers]
+      summary: Set driver status to offline
+      responses:
+        '200':
+          description: Now offline
+
+  # ── Messages ──────────────────────────────────────────────────────────────
+  /api/messages:
+    get:
+      tags: [Messages]
+      summary: Get chat history for a chat room
+      parameters:
+        - name: chatId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Message list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages: { type: array, items: { $ref: '#/components/schemas/Message' } }
+    post:
+      tags: [Messages]
+      summary: Send a message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chatId, text]
+              properties:
+                chatId: { type: string }
+                text: { type: string, maxLength: 500 }
+                isTemplate: { type: boolean }
+      responses:
+        '201':
+          description: Message sent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '429':
+          description: Rate limit
+
+  # ── Payments ──────────────────────────────────────────────────────────────
+  /api/payments:
+    post:
+      tags: [Payments]
+      summary: Create a Pi payment for a ride
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rideId]
+              properties:
+                rideId: { type: string }
+                type: { type: string, enum: [ride, tip] }
+                amount: { type: number }
+      responses:
+        '201':
+          description: Payment created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+        '409':
+          description: Payment already in progress
+
+  /api/payments/cancel-unknown-pi:
+    post:
+      tags: [Payments]
+      summary: Cancel an incomplete Pi payment not in our DB (unblocks SDK)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [piPaymentId]
+              properties:
+                piPaymentId: { type: string }
+      responses:
+        '200':
+          description: Cancelled on Pi Network
+
+  /api/payments/{id}:
+    get:
+      tags: [Payments]
+      summary: Get payment by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Payment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+
+  /api/payments/{id}/approve:
+    post:
+      tags: [Payments]
+      summary: Server-side approval callback (called by Pi SDK)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [piPaymentId]
+              properties:
+                piPaymentId: { type: string }
+      responses:
+        '200':
+          description: Approved (escrow held)
+
+  /api/payments/{id}/complete:
+    post:
+      tags: [Payments]
+      summary: Server-side completion callback (Pi blockchain confirmed)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [piPaymentId, txid]
+              properties:
+                piPaymentId: { type: string }
+                txid: { type: string }
+      responses:
+        '200':
+          description: Payment completed
+
+  /api/payments/{id}/cancel:
+    post:
+      tags: [Payments]
+      summary: Cancel an incomplete payment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [piPaymentId]
+              properties:
+                piPaymentId: { type: string }
+      responses:
+        '200':
+          description: Cancelled
+
+  # ── Reports ───────────────────────────────────────────────────────────────
+  /api/reports:
+    post:
+      tags: [Reports]
+      summary: Submit a user report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rideId, reportedId, reason]
+              properties:
+                rideId: { type: string }
+                reportedId: { type: string }
+                reason: { type: string, maxLength: 100 }
+                description: { type: string, maxLength: 500 }
+      responses:
+        '201':
+          description: Report created
+
+  # ── Push tokens ───────────────────────────────────────────────────────────
+  /api/push-token:
+    post:
+      tags: [Push]
+      summary: Register a push notification token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+                platform: { type: string, enum: [android, ios, web] }
+      responses:
+        '200':
+          description: Token registered
+    delete:
+      tags: [Push]
+      summary: Remove a push token (logout)
+      responses:
+        '200':
+          description: Token removed
+
+  # ── Admin ─────────────────────────────────────────────────────────────────
+  /api/admin/stats:
+    get:
+      tags: [Admin]
+      summary: Platform statistics
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/admin/analytics:
+    get:
+      tags: [Admin]
+      summary: Time-series analytics
+      responses:
+        '200':
+          description: Analytics
+
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      summary: List all users
+      responses:
+        '200':
+          description: User list
+
+  /api/admin/users/{id}:
+    patch:
+      tags: [Admin]
+      summary: Block/unblock user or change role
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                isBlocked: { type: boolean }
+                blockReason: { type: string }
+                role: { type: string, enum: [passenger, driver, admin] }
+      responses:
+        '200':
+          description: User updated
+
+  /api/admin/rides:
+    get:
+      tags: [Admin]
+      summary: List all rides (admin view)
+      responses:
+        '200':
+          description: All rides
+
+  /api/admin/rides/{id}/retry-payout:
+    post:
+      tags: [Admin]
+      summary: Retry a stalled payment payout
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Payout retried
+
+  /api/admin/pi-payments/{identifier}/cancel:
+    post:
+      tags: [Admin]
+      summary: Cancel a Pi payment directly (admin)
+      parameters:
+        - name: identifier
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Cancelled
+
+  /api/admin/drivers:
+    get:
+      tags: [Admin]
+      summary: List all driver applications
+      responses:
+        '200':
+          description: Driver list
+
+  /api/admin/drivers/{id}/verify:
+    post:
+      tags: [Admin]
+      summary: Approve or reject a driver application
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approve]
+              properties:
+                approve: { type: boolean }
+      responses:
+        '200':
+          description: Driver verified/rejected
+
+  /api/admin/reports:
+    get:
+      tags: [Admin]
+      summary: List all reports
+      responses:
+        '200':
+          description: Reports
+
+  /api/admin/reports/{id}:
+    patch:
+      tags: [Admin]
+      summary: Resolve or dismiss a report
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [resolved, dismissed] }
+      responses:
+        '200':
+          description: Report updated
+
+  /api/admin/settings:
+    get:
+      tags: [Admin]
+      summary: Get full platform settings (admin)
+      responses:
+        '200':
+          description: Full settings object
+    patch:
+      tags: [Admin]
+      summary: Update platform settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platformFeePercent: { type: number }
+                surgeEnabled: { type: boolean }
+                minFare: { type: number }
+                baseFarePerKm: { type: number }
+                appName: { type: string }
+                appLogo: { type: string }
+                contactEmail: { type: string, format: email }
+                maintenanceMode: { type: boolean }
+                maxSearchRadiusKm: { type: number }
+                extendedSearchRadiusKm: { type: number }
+                minDriverRating: { type: number }
+                autoBlockThreshold: { type: number }
+      responses:
+        '200':
+          description: Settings updated

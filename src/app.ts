@@ -1,5 +1,9 @@
 import express, { type Express } from 'express';
 import helmet from 'helmet';
+import swaggerUi from 'swagger-ui-express';
+import yaml from 'js-yaml';
+import fs from 'fs';
+import path from 'path';
 import { env } from './config/env';
 import { isFirebaseEnabled } from './config/firebase';
 import { storeKind } from './models';
@@ -48,6 +52,28 @@ export function createApp(): Express {
   );
   app.use(corsMiddleware);
   app.use(express.json({ limit: '1mb' }));
+
+  // Swagger UI at /api/docs (no auth, dev-friendly CSP override for this path).
+  // Loaded lazily so a missing yaml file doesn't crash the whole server.
+  try {
+    const specPath = path.resolve(__dirname, '../../openapi.yaml');
+    const spec = yaml.load(fs.readFileSync(specPath, 'utf8')) as Record<string, unknown>;
+    app.use(
+      '/api/docs',
+      // Swagger UI needs inline scripts; relax CSP only for this sub-path.
+      (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+        res.setHeader(
+          'Content-Security-Policy',
+          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+        );
+        next();
+      },
+      swaggerUi.serve,
+      swaggerUi.setup(spec, { customSiteTitle: 'Taxi Pro API Docs' })
+    );
+  } catch {
+    // openapi.yaml not found (e.g. in test env) — skip Swagger UI silently.
+  }
 
   // Health check (no auth) — surfaces sandbox + storage mode to the frontend.
   app.get('/api/health', (_req, res) => {
