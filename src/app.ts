@@ -1,6 +1,5 @@
 import express, { type Express } from 'express';
 import helmet from 'helmet';
-import swaggerUi from 'swagger-ui-express';
 import yaml from 'js-yaml';
 import fs from 'fs';
 import path from 'path';
@@ -53,28 +52,59 @@ export function createApp(): Express {
   app.use(corsMiddleware);
   app.use(express.json({ limit: '1mb' }));
 
-  // Swagger UI at /api/docs (no auth, dev-friendly CSP override for this path).
-  // Loaded lazily so a missing yaml file doesn't crash the whole server.
+  // Swagger UI at /api/docs — standalone HTML + CDN Swagger UI (no npm package).
+  // Serves the spec as JSON at /api/docs/spec.json and a plain HTML page that
+  // loads Swagger UI from unpkg. No inline scripts = no CSP issues.
   try {
-    // In dev (tsx) __dirname is src/; in compiled dist/ it's dist/. Walk up to the
-    // project root in both cases by looking for openapi.yaml relative to process.cwd().
     const specPath = path.resolve(process.cwd(), 'openapi.yaml');
-    const spec = yaml.load(fs.readFileSync(specPath, 'utf8')) as Record<string, unknown>;
-    app.use(
-      '/api/docs',
-      // Swagger UI v5 uses blob: workers, eval, and inline styles — remove the
-      // global strict CSP for this path only. /api/docs is a dev tool, not an
-      // app surface, so the relaxation is intentional and scoped.
-      (_req: express.Request, res: express.Response, next: express.NextFunction) => {
-        res.removeHeader('Content-Security-Policy');
-        res.removeHeader('X-Content-Type-Options');
-        next();
-      },
-      swaggerUi.serve,
-      swaggerUi.setup(spec, { customSiteTitle: 'Taxi Pro API Docs' })
-    );
+    const specJson = JSON.stringify(yaml.load(fs.readFileSync(specPath, 'utf8')));
+
+    // Raw spec for programmatic use
+    app.get('/api/docs/spec.json', (_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.removeHeader('Content-Security-Policy');
+      res.send(specJson);
+    });
+
+    // Swagger UI HTML — CDN assets, no inline scripts
+    const docsHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Taxi Pro API Docs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = function() {
+      SwaggerUIBundle({
+        url: '/api/docs/spec.json',
+        dom_id: '#swagger-ui',
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+        layout: 'StandaloneLayout',
+        deepLinking: true,
+      });
+    };
+  </script>
+</body>
+</html>`;
+
+    app.get('/api/docs', (_req, res) => {
+      res.removeHeader('Content-Security-Policy');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(docsHtml);
+    });
+    app.get('/api/docs/', (_req, res) => {
+      res.removeHeader('Content-Security-Policy');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(docsHtml);
+    });
   } catch {
-    // openapi.yaml not found (e.g. in test env) — skip Swagger UI silently.
+    // openapi.yaml not found — skip silently.
   }
 
   // Health check (no auth) — surfaces sandbox + storage mode to the frontend.
