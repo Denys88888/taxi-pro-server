@@ -24,9 +24,24 @@ export async function devAuth(req: Request, res: Response): Promise<void> {
     return;
   }
   const uid = `dev_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-  // Admin role is granted only via ADMIN_UIDS env var, never via devAuth request.
-  const resolvedRole = role === 'driver' ? 'driver' : 'passenger';
+  // Admin comes from ADMIN_UIDS only — never from the request body, or anyone
+  // hitting this sandbox endpoint could mint themselves an admin session. A dev
+  // uid listed in ADMIN_UIDS is still promoted, so the admin console stays
+  // testable in a normal browser (same rule piAuth applies).
+  const isAdmin = adminUids.has(uid);
+  const resolvedRole = isAdmin ? 'admin' : role === 'driver' ? 'driver' : 'passenger';
   const existing = await store().getUser(uid);
+  // An existing dev user whose uid was added to ADMIN_UIDS after first login
+  // would otherwise keep its stale stored role forever.
+  if (existing && isAdmin && existing.role !== 'admin') {
+    const promoted = await store().updateUser(uid, { role: 'admin' });
+    if (promoted) {
+      const t = signToken({ uid, role: 'admin', username: name });
+      logger.info('[Auth] dev-login (promoted to admin via ADMIN_UIDS)', { uid });
+      res.json({ token: t, user: promoted });
+      return;
+    }
+  }
   const user: User = existing ?? {
     uid,
     role: resolvedRole,
