@@ -120,7 +120,7 @@ export interface Ride {
   // A2U payout of the driver's share (fare minus platform fee) out of the app
   // wallet — separate from paymentStatus, which only tracks the passenger's
   // U2A payment into the app wallet.
-  driverPayoutStatus?: 'pending' | 'completed' | 'failed';
+  driverPayoutStatus?: 'pending' | 'completed' | 'failed' | 'no_wallet_configured';
   driverPayoutTxid?: string;
   driverPayoutError?: string;
   // Pi's payment identifier for a failed attempt — lets an operator cancel

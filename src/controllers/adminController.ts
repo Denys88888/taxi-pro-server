@@ -31,7 +31,18 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
     res.status(409).json({ error: 'Ride has no completed fare payment to pay out' });
     return;
   }
-  await payoutDriver(ride, 'fare', ride.driverEarnings);
+  // If a previous A2U attempt got stuck in Pi's 'approved' state, Pi will
+  // reject the new transfer with "ongoing_payment_found". Cancel it first.
+  if (ride.driverPayoutPiId) {
+    await piCancelPayment(ride.driverPayoutPiId).catch(() => undefined);
+  }
+  // A 'pending' status means the server crashed mid-transfer. Reset it so
+  // payoutDriver's duplicate guard doesn't silently skip the retry.
+  if (ride.driverPayoutStatus === 'pending' || ride.driverPayoutStatus === 'failed' || ride.driverPayoutStatus === 'no_wallet_configured') {
+    await store().updateRide(ride.id, { driverPayoutStatus: undefined, driverPayoutPiId: undefined });
+  }
+  const fresh = (await store().getRide(req.params.id))!;
+  await payoutDriver(fresh, 'fare', fresh.driverEarnings);
   const updated = await store().getRide(req.params.id);
   res.json({
     driverPayoutStatus: updated?.driverPayoutStatus,
