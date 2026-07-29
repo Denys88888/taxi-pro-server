@@ -62,8 +62,13 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
 
 // GET /api/admin/unpaid-payouts — list completed rides where driverPayoutStatus
 // is failed, no_wallet_configured, or missing so the operator can retry them.
-export async function getUnpaidPayouts(_req: Request, res: Response): Promise<void> {
-  const rides = await store().listAllRides();
+export async function getUnpaidPayouts(req: Request, res: Response): Promise<void> {
+  // Bounded to a recent window so opening the tab doesn't read the whole ride
+  // history. Nothing is hidden permanently — ?days= widens it when an operator
+  // needs to reach further back.
+  const days = Math.min(3650, Math.max(1, Number(req.query.days) || 90));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const rides = await store().listRidesSince(since);
   // 'pending' means a transfer is mid-flight. Only surface it once it is old
   // enough that it can't still be running — otherwise every healthy payout
   // shows up as "unpaid" for the few seconds it takes to settle, and an
@@ -105,18 +110,17 @@ export async function cancelPiPayment(req: Request, res: Response): Promise<void
 
 // GET /api/admin/stats — dashboard summary cards.
 export async function getStats(_req: Request, res: Response): Promise<void> {
-  const [rides, users, reports] = await Promise.all([
-    store().listAllRides(),
+  // Counters come from backend aggregates — loading every ride just to count
+  // them and sum one field is what made this endpoint scale with history.
+  const [stats, users, reports] = await Promise.all([
+    store().rideStats(),
     store().listUsers(),
     store().listReports('open'),
   ]);
-  const completed = rides.filter((r) => r.status === 'completed');
-  const platformEarnings = round(
-    completed.reduce((sum, r) => sum + (r.platformFee || 0), 0)
-  );
+  const platformEarnings = stats.platformEarnings;
   res.json({
-    totalRides: rides.length,
-    completedRides: completed.length,
+    totalRides: stats.total,
+    completedRides: stats.completed,
     activeUsers: users.filter((u) => !u.isBlocked).length,
     totalUsers: users.length,
     drivers: users.filter((u) => u.role === 'driver').length,
@@ -188,9 +192,15 @@ export async function listAllRides(req: Request, res: Response): Promise<void> {
   const status = RIDE_STATUSES.includes(statusParam as RideStatus)
     ? (statusParam as RideStatus)
     : undefined;
-  const [rides, users] = await Promise.all([store().listAllRides(status), store().listUsers()]);
+  const [allRides, users] = await Promise.all([store().listAllRides(status), store().listUsers()]);
+  // The table has no pagination UI, so cap what it ships instead of growing the
+  // payload (and the read cost) with the whole history. ?limit= raises it.
+  const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 200));
+  const rides = allRides.slice(0, limit);
   const names = new Map(users.map((u) => [u.uid, u.name]));
   res.json({
+    total: allRides.length,
+    returned: rides.length,
     rides: rides.map((r) => ({
       ...r,
       passengerName: names.get(r.passengerId) ?? r.passengerId,
@@ -219,11 +229,20 @@ export async function listDrivers(req: Request, res: Response): Promise<void> {
 
 // GET /api/admin/analytics — charts for the admin dashboard: rides per hour of
 // day (last 7 days), revenue per day (last 14 days), top drivers and routes.
+//
+// Everything here is windowed to the last 14 days. The two leaderboards used to
+// be all-time, which meant reading the entire ride history on every dashboard
+// load; a rolling window is both bounded and the more useful reading for an
+// operations dashboard.
 export async function getAnalytics(_req: Request, res: Response): Promise<void> {
-  const [rides, users] = await Promise.all([store().listAllRides(), store().listUsers()]);
-  const names = new Map(users.map((u) => [u.uid, u.name]));
-  const now = Date.now();
   const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const windowStart = new Date(now - 14 * DAY).toISOString();
+  const [rides, users] = await Promise.all([
+    store().listRidesSince(windowStart),
+    store().listUsers(),
+  ]);
+  const names = new Map(users.map((u) => [u.uid, u.name]));
 
   const ridesByHour = new Array(24).fill(0) as number[];
   for (const r of rides) {

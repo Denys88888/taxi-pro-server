@@ -13,7 +13,7 @@ import type {
   RideStatus,
 } from '../types';
 import { DEFAULT_SETTINGS } from '../config/constants';
-import { nowIso, genId } from '../utils/helpers';
+import { nowIso, genId, round } from '../utils/helpers';
 import { runMigrations } from './migrations';
 import type { DataStore, PaginatedRides } from './store';
 
@@ -195,6 +195,35 @@ export class SqliteStore implements DataStore {
         : this.db.prepare('SELECT data FROM rides ORDER BY created_at DESC').all()
     ) as { data: string }[];
     return rows.map((r) => JSON.parse(r.data) as Ride);
+  }
+
+  async listRidesSince(sinceIso: string, status?: RideStatus): Promise<Ride[]> {
+    const rows = (
+      status
+        ? this.db
+            .prepare(
+              'SELECT data FROM rides WHERE status = ? AND created_at >= ? ORDER BY created_at DESC'
+            )
+            .all(status, sinceIso)
+        : this.db
+            .prepare('SELECT data FROM rides WHERE created_at >= ? ORDER BY created_at DESC')
+            .all(sinceIso)
+    ) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as Ride);
+  }
+
+  async rideStats(): Promise<{ total: number; completed: number; platformEarnings: number }> {
+    const total = (this.db.prepare('SELECT COUNT(*) AS n FROM rides').get() as { n: number }).n;
+    // platformFee lives inside the JSON blob, so sum it via json_extract rather
+    // than deserialising every completed ride in JS.
+    const agg = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n,
+                COALESCE(SUM(CAST(json_extract(data, '$.platformFee') AS REAL)), 0) AS fee
+           FROM rides WHERE status = 'completed'`
+      )
+      .get() as { n: number; fee: number };
+    return { total, completed: agg.n, platformEarnings: round(agg.fee) };
   }
 
   // ── Messages ───────────────────────────────────────────────────────────────

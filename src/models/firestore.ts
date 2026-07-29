@@ -1,4 +1,7 @@
 import type * as adminNs from 'firebase-admin';
+// Value import (the namespace above is types only) — AggregateField is needed
+// at runtime to build the count/sum aggregates in rideStats.
+import { AggregateField } from 'firebase-admin/firestore';
 import { getFirestore } from '../config/firebase';
 import type {
   User,
@@ -12,7 +15,7 @@ import type {
   RideStatus,
 } from '../types';
 import { DEFAULT_SETTINGS } from '../config/constants';
-import { nowIso } from '../utils/helpers';
+import { nowIso, round } from '../utils/helpers';
 import type { DataStore, PaginatedRides } from './store';
 
 const SETTINGS_DOC = 'global';
@@ -97,6 +100,42 @@ export class FirestoreStore implements DataStore {
     const snap = await q.get();
     const rides = snap.docs.map((d) => d.data() as Ride);
     return status ? rides.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : rides;
+  }
+
+  async listRidesSince(sinceIso: string, status?: RideStatus): Promise<Ride[]> {
+    // A range filter on createdAt combined with an equality filter on status
+    // needs a composite index, which this project doesn't provision. Range-only
+    // is served by the automatic single-field index, so bound by time in the
+    // query — the part that actually grows without limit — and narrow by status
+    // in memory over that already-small window.
+    const snap = await this.db()
+      .collection('rides')
+      .where('createdAt', '>=', sinceIso)
+      .get();
+    const rides = snap.docs.map((d) => d.data() as Ride);
+    const filtered = status ? rides.filter((r) => r.status === status) : rides;
+    return filtered.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async rideStats(): Promise<{ total: number; completed: number; platformEarnings: number }> {
+    const rides = this.db().collection('rides');
+    const completedQ = rides.where('status', '==', 'completed');
+    // Server-side aggregates: billed as a handful of reads regardless of how
+    // many rides exist, instead of one read per document.
+    const [totalSnap, completedSnap] = await Promise.all([
+      rides.count().get(),
+      completedQ
+        .aggregate({
+          n: AggregateField.count(),
+          fee: AggregateField.sum('platformFee'),
+        })
+        .get(),
+    ]);
+    return {
+      total: totalSnap.data().count,
+      completed: completedSnap.data().n,
+      platformEarnings: round(completedSnap.data().fee ?? 0),
+    };
   }
 
   async getMessages(chatId: string): Promise<Message[]> {

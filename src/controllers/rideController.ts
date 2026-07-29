@@ -141,10 +141,14 @@ export async function listOpenRides(req: Request, res: Response): Promise<void> 
 // went unserved (still searching or cancelled) in the last 30 minutes, grouped
 // into ~1 km cells with a weight per cell.
 export async function getHeatmap(_req: Request, res: Response): Promise<void> {
+  // Every driver's map hits this. Bound the read to the 30-minute window in the
+  // query — listing all cancelled rides and then discarding the old ones meant
+  // the cost of this endpoint grew with every ride the platform had ever taken.
   const since = Date.now() - 30 * 60 * 1000;
+  const sinceIso = new Date(since).toISOString();
   const [searching, cancelled] = await Promise.all([
-    store().listAllRides('searching'),
-    store().listAllRides('cancelled'),
+    store().listRidesSince(sinceIso, 'searching'),
+    store().listRidesSince(sinceIso, 'cancelled'),
   ]);
   const cells = new Map<string, { lat: number; lng: number; weight: number }>();
   for (const ride of [...searching, ...cancelled]) {

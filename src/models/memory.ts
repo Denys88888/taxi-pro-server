@@ -10,7 +10,7 @@ import type {
   RideStatus,
 } from '../types';
 import { DEFAULT_SETTINGS } from '../config/constants';
-import { nowIso } from '../utils/helpers';
+import { nowIso, round } from '../utils/helpers';
 import type { DataStore, PaginatedRides } from './store';
 
 // In-memory fallback used when Firebase is not configured or unavailable.
@@ -80,6 +80,22 @@ export class MemoryStore implements DataStore {
       b.createdAt.localeCompare(a.createdAt)
     );
     return status ? list.filter((r) => r.status === status) : list;
+  }
+
+  async listRidesSince(sinceIso: string, status?: RideStatus): Promise<Ride[]> {
+    const all = await this.listAllRides(status);
+    return all.filter((r) => r.createdAt >= sinceIso);
+  }
+
+  async rideStats(): Promise<{ total: number; completed: number; platformEarnings: number }> {
+    let completed = 0;
+    let platformEarnings = 0;
+    for (const r of this.rides.values()) {
+      if (r.status !== 'completed') continue;
+      completed += 1;
+      platformEarnings += r.platformFee || 0;
+    }
+    return { total: this.rides.size, completed, platformEarnings: round(platformEarnings) };
   }
 
   async getMessages(chatId: string): Promise<Message[]> {

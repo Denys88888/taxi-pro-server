@@ -38,6 +38,13 @@ export interface DataStore {
     limit: number
   ): Promise<PaginatedRides>;
   listAllRides(status?: RideStatus): Promise<Ride[]>;
+  // Time-bounded variant. The callers that only ever look at a recent window
+  // (heatmap: 30 min, analytics: 14 days) must not pull the whole collection
+  // and discard most of it — that cost grows with every ride ever taken.
+  listRidesSince(sinceIso: string, status?: RideStatus): Promise<Ride[]>;
+  // Dashboard counters, computed by the backend rather than by loading every
+  // ride into memory just to count them.
+  rideStats(): Promise<{ total: number; completed: number; platformEarnings: number }>;
 
   // Messages
   getMessages(chatId: string): Promise<Message[]>;
