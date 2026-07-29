@@ -36,6 +36,16 @@ export function initStore(): boolean {
     setStore(new SqliteStore(dbPath));
     activeStore = 'sqlite';
     logger.info('[Store] Using SQLite (durable, WAL).', { path: dbPath });
+    // On Render's free plan the container filesystem is ephemeral: without a
+    // mounted disk at the SQLITE_PATH directory, every deploy and every
+    // restart wipes rides, payments and payout statuses. Configure Firestore
+    // (free tier, see FIREBASE_* env vars) or attach a Render disk.
+    if (env.isProd) {
+      logger.error(
+        '[Store] SQLite in production — data is LOST on every deploy/restart unless a persistent disk is mounted at this path. Configure FIREBASE_* for Firestore, or attach a Render disk.',
+        { path: dbPath }
+      );
+    }
     return true;
   } catch (err) {
     logger.error('[Store] SQLite init failed, falling back to in-memory.', {
@@ -45,6 +55,12 @@ export function initStore(): boolean {
 
   setStore(new MemoryStore());
   activeStore = 'memory';
+  if (env.isProd) {
+    // Silently serving a payment app out of RAM loses every ride and payout
+    // record on restart. Fail fast instead of degrading invisibly.
+    logger.error('[Store] No durable store available in production — refusing to start.');
+    throw new Error('Refusing to start: no durable store (Firestore or SQLite) available in production');
+  }
   logger.warn('[Store] Using in-memory store (non-durable fallback).');
   return false;
 }

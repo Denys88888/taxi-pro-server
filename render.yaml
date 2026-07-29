@@ -22,8 +22,18 @@ services:
         value: https://denys88888.github.io
       - key: RENDER_URL
         sync: false
-      # SQLite DB path. For cross-deploy persistence, attach a Render disk mounted
-      # at /app/data (see the `disk` block below — requires a paid plan).
+      # SQLite DB path.
+      #
+      # WARNING: on the free plan the container filesystem is EPHEMERAL. With no
+      # disk mounted at /app/data, every deploy and every restart destroys all
+      # rides, payments and driver-payout records. For a payment app that means
+      # unpaid payouts become unrecoverable.
+      #
+      # Pick one of:
+      #   a) Firestore (free tier, recommended) — set FIREBASE_PROJECT_ID,
+      #      FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY above. The server
+      #      prefers Firestore over SQLite automatically when they are present.
+      #   b) A Render disk (paid plan) — uncomment the `disk` block below.
       - key: SQLITE_PATH
         value: /app/data/taxipro.db
     # disk:

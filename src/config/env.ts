@@ -62,9 +62,12 @@ export const env = {
   PI_NETWORK_PASSPHRASE: raw.PI_NETWORK_PASSPHRASE ?? (raw.PI_SANDBOX ? 'Pi Testnet' : 'Pi Network'),
 };
 
-// Guardrails: warn loudly if running in production with insecure defaults.
+// Guardrails: refuse to boot in production with the insecure default secret —
+// a warning is not enough, since anyone who knows the public default can forge
+// admin JWTs for the deployment.
 if (env.isProd && env.JWT_SECRET.startsWith('dev-only-insecure')) {
   logger.error('JWT_SECRET is using the insecure development default in production! Set a secure JWT_SECRET env var.');
+  throw new Error('Refusing to start: JWT_SECRET must be set to a real secret in production');
 }
 if (!env.PI_API_KEY) {
   logger.warn('PI_API_KEY is not set — Pi payment endpoints will return 503.');

@@ -171,8 +171,29 @@ export async function cancelIncompletePayment(req: Request, res: Response): Prom
 // onIncompletePaymentFound and blocks all future Pi.createPayment calls.
 export async function cancelUnknownPiPayment(req: Request, res: Response): Promise<void> {
   const { piPaymentId } = req.body as { piPaymentId: string };
+  // Ownership check — without this any authenticated user could cancel any
+  // other user's in-flight Pi payment just by guessing/observing its id. Ask
+  // Pi who the payment belongs to and refuse if it isn't the caller's.
+  try {
+    const { ok, data } = await getPiPayment<{ user_uid?: string }>(piPaymentId);
+    if (!ok) {
+      res.status(404).json({ error: 'Pi payment not found' });
+      return;
+    }
+    if (data.user_uid && data.user_uid !== req.user!.uid) {
+      logger.warn('[Payment] blocked cross-user cancel attempt', {
+        piPaymentId, owner: data.user_uid, caller: req.user!.uid,
+      });
+      res.status(403).json({ error: 'Not your payment' });
+      return;
+    }
+  } catch (err) {
+    logger.warn('[Payment] ownership check failed', { piPaymentId, error: (err as Error).message });
+    res.status(502).json({ error: 'Could not verify payment ownership' });
+    return;
+  }
   const result = await piCancel(piPaymentId);
-  logger.info('[Payment] cancelled unknown Pi payment', { piPaymentId, ok: result.ok });
+  logger.info('[Payment] cancelled unknown Pi payment', { piPaymentId, uid: req.user!.uid, ok: result.ok });
   // Return success even if Pi's cancel failed (e.g. already cancelled) — the
   // goal is just to unblock the SDK, not to guarantee a round-trip.
   res.status(200).json({ success: true, piStatus: result.status });

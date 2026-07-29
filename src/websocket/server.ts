@@ -15,19 +15,38 @@ import {
 const HEARTBEAT_MS = 30_000;
 
 // Attach a WebSocket server to the existing HTTP server. Authentication happens
-// at the handshake: the client connects to wss://host/?token=<jwt>. An invalid or
-// missing token closes the socket with code 1008 (policy violation).
+// at the handshake via the Sec-WebSocket-Protocol header (`jwt, <token>`), which
+// — unlike a ?token= query string — is not written to access logs by proxies,
+// CDNs or Render itself. The query string is still accepted so clients running
+// an older cached bundle keep working; drop it once those have rolled over.
+// An invalid or missing token closes the socket with code 1008.
 export function initWebSocket(httpServer: HttpServer): WebSocketServer {
-  const wss = new WebSocketServer({ server: httpServer });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    // Echo back only the 'jwt' marker, never the token itself.
+    handleProtocols: (protocols) => (protocols.has('jwt') ? 'jwt' : false),
+  });
 
   wss.on('connection', async (socket, req) => {
     const ws = socket as AuthedSocket;
     let token: string | null = null;
-    try {
-      const url = new URL(req.url ?? '', 'http://localhost');
-      token = url.searchParams.get('token');
-    } catch {
-      token = null;
+    // Preferred: Sec-WebSocket-Protocol: jwt, <token>
+    const proto = req.headers['sec-websocket-protocol'];
+    if (proto) {
+      const parts = (Array.isArray(proto) ? proto.join(',') : proto)
+        .split(',')
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (parts[0] === 'jwt' && parts[1]) token = parts[1];
+    }
+    // Legacy fallback: ?token= in the URL.
+    if (!token) {
+      try {
+        const url = new URL(req.url ?? '', 'http://localhost');
+        token = url.searchParams.get('token');
+      } catch {
+        token = null;
+      }
     }
 
     const payload = verifyToken(token ?? undefined);
