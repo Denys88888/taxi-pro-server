@@ -1,5 +1,6 @@
 import { store } from '../models';
 import { broadcastToDriversOfType, sendToUser } from '../websocket/broadcast';
+import { releaseHeldPayment } from '../controllers/paymentController';
 import { logger } from '../utils/logger';
 import { DRIVER_OFFER_TIMEOUT_MS } from '../config/constants';
 
@@ -92,6 +93,9 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
             });
           }
           if (now - new Date(ride.createdAt).getTime() > SEARCH_TIMEOUT_MS) {
+            if (ride.paymentStatus === 'held' && ride.paymentId) {
+              await releaseHeldPayment(ride.paymentId);
+            }
             const updated = await store().updateRide(ride.id, {
               status: 'cancelled',
               paymentStatus: ride.paymentStatus === 'held' ? 'refunded' : 'cancelled',
@@ -119,6 +123,9 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
         for (const ride of rides) {
           try {
             if (now - new Date(ride.updatedAt ?? ride.createdAt).getTime() > timeout) {
+              if (ride.paymentStatus === 'held' && ride.paymentId) {
+                await releaseHeldPayment(ride.paymentId);
+              }
               const updated = await store().updateRide(ride.id, {
                 status: 'cancelled',
                 paymentStatus: ride.paymentStatus === 'held' ? 'refunded' : 'cancelled',

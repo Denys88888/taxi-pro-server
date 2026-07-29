@@ -24,7 +24,8 @@ export async function devAuth(req: Request, res: Response): Promise<void> {
     return;
   }
   const uid = `dev_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-  const resolvedRole = role === 'driver' ? 'driver' : role === 'admin' ? 'admin' : 'passenger';
+  // Admin role is granted only via ADMIN_UIDS env var, never via devAuth request.
+  const resolvedRole = role === 'driver' ? 'driver' : 'passenger';
   const existing = await store().getUser(uid);
   const user: User = existing ?? {
     uid,

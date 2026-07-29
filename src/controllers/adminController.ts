@@ -31,46 +31,55 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
     res.status(409).json({ error: 'Ride has no completed fare payment to pay out' });
     return;
   }
-  // If a previous A2U attempt got stuck in Pi's 'approved' state, Pi will
-  // reject the new transfer with "ongoing_payment_found". Cancel it first.
-  if (ride.driverPayoutPiId) {
-    await piCancelPayment(ride.driverPayoutPiId).catch(() => undefined);
+  const kind: 'fare' | 'tip' = (req.body as { kind?: string }).kind === 'tip' ? 'tip' : 'fare';
+
+  if (kind === 'fare') {
+    if (ride.driverPayoutPiId) await piCancelPayment(ride.driverPayoutPiId).catch(() => undefined);
+    if (['pending', 'failed', 'no_wallet_configured'].includes(ride.driverPayoutStatus ?? '')) {
+      await store().updateRide(ride.id, { driverPayoutStatus: undefined, driverPayoutPiId: undefined });
+    }
+  } else {
+    if (!ride.tipAmount || ride.tipAmount <= 0) {
+      res.status(409).json({ error: 'Ride has no tip to pay out' });
+      return;
+    }
+    if (ride.tipPayoutPiId) await piCancelPayment(ride.tipPayoutPiId).catch(() => undefined);
+    if (['pending', 'failed', 'no_wallet_configured'].includes(ride.tipPayoutStatus ?? '')) {
+      await store().updateRide(ride.id, { tipPayoutStatus: undefined, tipPayoutPiId: undefined });
+    }
   }
-  // A 'pending' status means the server crashed mid-transfer. Reset it so
-  // payoutDriver's duplicate guard doesn't silently skip the retry.
-  if (ride.driverPayoutStatus === 'pending' || ride.driverPayoutStatus === 'failed' || ride.driverPayoutStatus === 'no_wallet_configured') {
-    await store().updateRide(ride.id, { driverPayoutStatus: undefined, driverPayoutPiId: undefined });
-  }
+
   const fresh = (await store().getRide(req.params.id))!;
-  await payoutDriver(fresh, 'fare', fresh.driverEarnings);
+  const amount = kind === 'fare' ? fresh.driverEarnings : (fresh.tipAmount ?? 0);
+  await payoutDriver(fresh, kind, amount);
   const updated = await store().getRide(req.params.id);
-  res.json({
-    driverPayoutStatus: updated?.driverPayoutStatus,
-    driverPayoutTxid: updated?.driverPayoutTxid,
-    driverPayoutError: updated?.driverPayoutError,
-  });
+  res.json(
+    kind === 'fare'
+      ? { driverPayoutStatus: updated?.driverPayoutStatus, driverPayoutTxid: updated?.driverPayoutTxid, driverPayoutError: updated?.driverPayoutError }
+      : { driverPayoutStatus: updated?.tipPayoutStatus, driverPayoutTxid: updated?.tipPayoutTxid, driverPayoutError: updated?.tipPayoutError }
+  );
 }
 
 // GET /api/admin/unpaid-payouts — list completed rides where driverPayoutStatus
 // is failed, no_wallet_configured, or missing so the operator can retry them.
 export async function getUnpaidPayouts(_req: Request, res: Response): Promise<void> {
   const rides = await store().listAllRides();
-  const unpaid = rides.filter(
-    (r) =>
-      r.status === 'completed' &&
-      r.driverId &&
-      r.paymentStatus === 'completed' &&
-      (!r.driverPayoutStatus || ['failed', 'no_wallet_configured'].includes(r.driverPayoutStatus))
-  );
-  res.json(unpaid.map((r) => ({
-    id: r.id,
-    driverId: r.driverId,
-    driverEarnings: r.driverEarnings,
-    fare: r.fare,
-    driverPayoutStatus: r.driverPayoutStatus ?? 'missing',
-    driverPayoutError: r.driverPayoutError,
-    createdAt: r.createdAt,
-  })));
+  const STUCK = ['failed', 'no_wallet_configured', 'pending'] as const;
+  type PayoutItem = {
+    id: string; driverId: string | undefined; amount: number; fare: number;
+    payoutStatus: string; payoutError?: string; createdAt: string; kind: 'fare' | 'tip';
+  };
+  const items: PayoutItem[] = [];
+  for (const r of rides) {
+    if (r.status !== 'completed' || !r.driverId || r.paymentStatus !== 'completed') continue;
+    if (!r.driverPayoutStatus || STUCK.includes(r.driverPayoutStatus as typeof STUCK[number])) {
+      items.push({ id: r.id, driverId: r.driverId, amount: r.driverEarnings, fare: r.fare, payoutStatus: r.driverPayoutStatus ?? 'missing', payoutError: r.driverPayoutError, createdAt: r.createdAt, kind: 'fare' });
+    }
+    if (r.tipAmount && r.tipAmount > 0 && (!r.tipPayoutStatus || STUCK.includes(r.tipPayoutStatus as typeof STUCK[number]))) {
+      items.push({ id: r.id, driverId: r.driverId, amount: r.tipAmount, fare: r.fare, payoutStatus: r.tipPayoutStatus ?? 'missing', payoutError: r.tipPayoutError, createdAt: r.createdAt, kind: 'tip' });
+    }
+  }
+  res.json(items);
 }
 
 // POST /api/admin/pi-payments/:identifier/cancel — cancel a Pi payment stuck

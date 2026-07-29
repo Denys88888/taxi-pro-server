@@ -128,7 +128,7 @@ export interface Ride {
   // without having to parse it back out of the "ongoing_payment_found" error.
   driverPayoutPiId?: string;
   // A2U payout of a tip (100% to the driver, no platform fee).
-  tipPayoutStatus?: 'pending' | 'completed' | 'failed';
+  tipPayoutStatus?: 'pending' | 'completed' | 'failed' | 'no_wallet_configured';
   tipPayoutTxid?: string;
   tipPayoutError?: string;
   tipPayoutPiId?: string;
