@@ -40,6 +40,28 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
   });
 }
 
+// GET /api/admin/unpaid-payouts — list completed rides where driverPayoutStatus
+// is failed, no_wallet_configured, or missing so the operator can retry them.
+export async function getUnpaidPayouts(_req: Request, res: Response): Promise<void> {
+  const rides = await store().listAllRides();
+  const unpaid = rides.filter(
+    (r) =>
+      r.status === 'completed' &&
+      r.driverId &&
+      r.paymentStatus === 'completed' &&
+      (!r.driverPayoutStatus || ['failed', 'no_wallet_configured'].includes(r.driverPayoutStatus))
+  );
+  res.json(unpaid.map((r) => ({
+    id: r.id,
+    driverId: r.driverId,
+    driverEarnings: r.driverEarnings,
+    fare: r.fare,
+    driverPayoutStatus: r.driverPayoutStatus ?? 'missing',
+    driverPayoutError: r.driverPayoutError,
+    createdAt: r.createdAt,
+  })));
+}
+
 // POST /api/admin/pi-payments/:identifier/cancel — cancel a Pi payment stuck
 // in 'approved' (never completed) that's blocking new A2U payouts to the
 // same user (Pi rejects a second A2U payment with "ongoing_payment_found"

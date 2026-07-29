@@ -41,6 +41,15 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
+  // Ride-level guard — checked before payment records to catch cases where
+  // piComplete timed out (status saved as 'failed') but Pi actually completed
+  // the transfer (txid exists on the ride). Without this, the passenger could
+  // trigger a second Pi deduction on a ride that was already paid.
+  if (type !== 'tip' && (ride.paymentStatus === 'completed' || ride.txid)) {
+    res.status(409).json({ error: 'Payment already completed' });
+    return;
+  }
+
   if (type !== 'tip' && ride.paymentId) {
     const existing = await store().getPayment(ride.paymentId);
     if (existing && existing.status === 'approved') {
@@ -276,8 +285,15 @@ export async function completePayment(req: Request, res: Response): Promise<void
 // PI_WALLET_SEED configured, this silently no-ops (logged once at startup);
 // funds simply stay queued as 'pending' until an operator backfills them.
 export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: number): Promise<void> {
-  if (!env.PI_WALLET_SEED || !ride.driverId || amount <= 0) return;
+  if (!ride.driverId || amount <= 0) return;
   const statusField = kind === 'fare' ? 'driverPayoutStatus' : 'tipPayoutStatus';
+  if (!env.PI_WALLET_SEED) {
+    await store().updateRide(ride.id, { [statusField]: 'no_wallet_configured' });
+    logger.warn('[Payout] PI_WALLET_SEED not set — ride queued for manual payout', {
+      rideId: ride.id, driverId: ride.driverId, kind, amount,
+    });
+    return;
+  }
   const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
   // Synchronously claim this (rideId, kind) before any await — two concurrent
   // callers can't both pass has()→add() since there's no yield point between
