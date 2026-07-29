@@ -186,21 +186,29 @@ export async function updateUserBlock(req: Request, res: Response): Promise<void
   res.json(updated);
 }
 
-// GET /api/admin/rides?status= — all rides, with party names for the table view.
+// GET /api/admin/rides?status=&days=&limit= — recent rides with party names for
+// the table view. Bounded by a time window rather than slicing an all-time read
+// in memory: slicing caps the payload but still pays to read the whole history,
+// which is the cost that actually matters on Firestore.
 export async function listAllRides(req: Request, res: Response): Promise<void> {
   const statusParam = String(req.query.status ?? '');
   const status = RIDE_STATUSES.includes(statusParam as RideStatus)
     ? (statusParam as RideStatus)
     : undefined;
-  const [allRides, users] = await Promise.all([store().listAllRides(status), store().listUsers()]);
-  // The table has no pagination UI, so cap what it ships instead of growing the
-  // payload (and the read cost) with the whole history. ?limit= raises it.
+  const days = Math.min(3650, Math.max(1, Number(req.query.days) || 30));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const [windowRides, users] = await Promise.all([
+    store().listRidesSince(since, status),
+    store().listUsers(),
+  ]);
   const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 200));
-  const rides = allRides.slice(0, limit);
+  // listRidesSince returns newest-first, so this really is the most recent N.
+  const rides = windowRides.slice(0, limit);
   const names = new Map(users.map((u) => [u.uid, u.name]));
   res.json({
-    total: allRides.length,
+    total: windowRides.length,
     returned: rides.length,
+    windowDays: days,
     rides: rides.map((r) => ({
       ...r,
       passengerName: names.get(r.passengerId) ?? r.passengerId,
