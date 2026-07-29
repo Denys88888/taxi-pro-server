@@ -64,7 +64,18 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
 // is failed, no_wallet_configured, or missing so the operator can retry them.
 export async function getUnpaidPayouts(_req: Request, res: Response): Promise<void> {
   const rides = await store().listAllRides();
-  const STUCK = ['failed', 'no_wallet_configured', 'pending'] as const;
+  // 'pending' means a transfer is mid-flight. Only surface it once it is old
+  // enough that it can't still be running — otherwise every healthy payout
+  // shows up as "unpaid" for the few seconds it takes to settle, and an
+  // operator retrying one would just be told it is already in progress.
+  const PENDING_STALE_MS = 10 * 60 * 1000;
+  const now = Date.now();
+  const isStuck = (status: string | undefined, updatedAt: string | undefined): boolean => {
+    if (!status) return true;
+    if (status === 'failed' || status === 'no_wallet_configured') return true;
+    if (status !== 'pending') return false;
+    return now - new Date(updatedAt ?? 0).getTime() > PENDING_STALE_MS;
+  };
   type PayoutItem = {
     id: string; driverId: string | undefined; amount: number; fare: number;
     payoutStatus: string; payoutError?: string; createdAt: string; kind: 'fare' | 'tip';
@@ -72,10 +83,10 @@ export async function getUnpaidPayouts(_req: Request, res: Response): Promise<vo
   const items: PayoutItem[] = [];
   for (const r of rides) {
     if (r.status !== 'completed' || !r.driverId || r.paymentStatus !== 'completed') continue;
-    if (!r.driverPayoutStatus || STUCK.includes(r.driverPayoutStatus as typeof STUCK[number])) {
+    if (isStuck(r.driverPayoutStatus, r.updatedAt)) {
       items.push({ id: r.id, driverId: r.driverId, amount: r.driverEarnings, fare: r.fare, payoutStatus: r.driverPayoutStatus ?? 'missing', payoutError: r.driverPayoutError, createdAt: r.createdAt, kind: 'fare' });
     }
-    if (r.tipAmount && r.tipAmount > 0 && (!r.tipPayoutStatus || STUCK.includes(r.tipPayoutStatus as typeof STUCK[number]))) {
+    if (r.tipAmount && r.tipAmount > 0 && isStuck(r.tipPayoutStatus, r.updatedAt)) {
       items.push({ id: r.id, driverId: r.driverId, amount: r.tipAmount, fare: r.fare, payoutStatus: r.tipPayoutStatus ?? 'missing', payoutError: r.tipPayoutError, createdAt: r.createdAt, kind: 'tip' });
     }
   }
