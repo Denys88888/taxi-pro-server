@@ -1,6 +1,7 @@
 import { store } from '../models';
 import { broadcastToDriversOfType, sendToUser } from '../websocket/broadcast';
 import { releaseHeldPayment } from '../controllers/paymentController';
+import { pushToUser } from './fcmService';
 import { logger } from '../utils/logger';
 import { DRIVER_OFFER_TIMEOUT_MS } from '../config/constants';
 
@@ -172,6 +173,8 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
                 ride: updated ?? ride,
               });
             }
+            await pushToUser(ride.passengerId, 'Ride complete', 'Your ride has been completed.', { rideId: ride.id, status: 'completed' });
+            if (ride.driverId) await pushToUser(ride.driverId, 'Ride complete', 'The ride has been marked as completed.', { rideId: ride.id, status: 'completed' });
             logger.info('[Scheduler] auto-completed stuck ride', { rideId: ride.id });
           }
         } catch (e) {

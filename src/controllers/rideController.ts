@@ -305,6 +305,15 @@ export async function updateRide(req: Request, res: Response): Promise<void> {
     res.status(409).json({ error: 'Can only rate a completed ride' });
     return;
   }
+  // Prevent double-rating — once submitted it cannot be changed.
+  if (isPassenger && ride.driverRating !== undefined && req.body.driverRating !== undefined) {
+    res.status(409).json({ error: 'Already rated this ride' });
+    return;
+  }
+  if (!isPassenger && ride.passengerRating !== undefined && req.body.passengerRating !== undefined) {
+    res.status(409).json({ error: 'Already rated this ride' });
+    return;
+  }
   const patch: Partial<Ride> = {};
   for (const key of allowed) {
     if (req.body[key] !== undefined) (patch as Record<string, unknown>)[key] = req.body[key];

@@ -169,6 +169,10 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Not a registered driver', code: 'NOT_DRIVER' });
         return;
       }
+      if (driver.isBlocked) {
+        send(ws, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+        return;
+      }
       if (driver.driverInfo.applicationStatus !== 'approved') {
         send(ws, { type: 'error', message: 'Driver not verified', code: 'NOT_VERIFIED' });
         return;
@@ -186,8 +190,14 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       const driverInfo = {
         uid,
         name: driver?.name,
+        phone: driver?.phone,
         rating: driver?.rating,
-        ...driver?.driverInfo,
+        vehicleType: driver?.driverInfo?.vehicleType,
+        brand: driver?.driverInfo?.brand,
+        model: driver?.driverInfo?.model,
+        color: driver?.driverInfo?.color,
+        number: driver?.driverInfo?.number,
+        vehiclePhoto: driver?.driverInfo?.vehiclePhoto,
       };
       sendToUser(ride.passengerId, {
         type: 'ride_assigned',
