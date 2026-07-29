@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import { DEFAULT_SETTINGS } from '../config/constants';
 import { nowIso, round } from '../utils/helpers';
+import { logger } from '../utils/logger';
 import type { DataStore, PaginatedRides } from './store';
 
 const SETTINGS_DOC = 'global';
@@ -120,22 +121,48 @@ export class FirestoreStore implements DataStore {
   async rideStats(): Promise<{ total: number; completed: number; platformEarnings: number }> {
     const rides = this.db().collection('rides');
     const completedQ = rides.where('status', '==', 'completed');
-    // Server-side aggregates: billed as a handful of reads regardless of how
-    // many rides exist, instead of one read per document.
-    const [totalSnap, completedSnap] = await Promise.all([
-      rides.count().get(),
-      completedQ
-        .aggregate({
-          n: AggregateField.count(),
-          fee: AggregateField.sum('platformFee'),
-        })
-        .get(),
-    ]);
-    return {
-      total: totalSnap.data().count,
-      completed: completedSnap.data().n,
-      platformEarnings: round(completedSnap.data().fee ?? 0),
-    };
+    try {
+      // Server-side aggregates: billed as a handful of reads regardless of how
+      // many rides exist, instead of one read per document.
+      const [totalSnap, completedSnap] = await Promise.all([
+        rides.count().get(),
+        completedQ
+          .aggregate({
+            n: AggregateField.count(),
+            fee: AggregateField.sum('platformFee'),
+          })
+          .get(),
+      ]);
+      const fee = completedSnap.data().fee;
+      // A sum that comes back non-numeric would quietly render platform
+      // earnings as 0 on the dashboard — treat that as a failed aggregate and
+      // fall through to the exact computation rather than reporting nothing.
+      if (typeof fee !== 'number' || Number.isNaN(fee)) {
+        throw new Error('sum aggregate returned a non-numeric value');
+      }
+      return {
+        total: totalSnap.data().count,
+        completed: completedSnap.data().n,
+        platformEarnings: round(fee),
+      };
+    } catch (err) {
+      // Slower and read-heavy, but correct. Wrong money figures on the
+      // dashboard are worse than an expensive query.
+      logger.warn('[Firestore] rideStats aggregate failed, falling back to a full read', {
+        error: (err as Error).message,
+      });
+      const [totalSnap, completedSnap] = await Promise.all([
+        rides.count().get().catch(() => null),
+        completedQ.get(),
+      ]);
+      const completed = completedSnap.docs.map((d) => d.data() as Ride);
+      const sum = completed.reduce((s, r) => s + (r.platformFee || 0), 0);
+      return {
+        total: totalSnap ? totalSnap.data().count : completed.length,
+        completed: completed.length,
+        platformEarnings: round(sum),
+      };
+    }
   }
 
   async getMessages(chatId: string): Promise<Message[]> {
