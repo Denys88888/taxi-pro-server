@@ -33,6 +33,20 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
   }
   const kind: 'fare' | 'tip' = (req.body as { kind?: string }).kind === 'tip' ? 'tip' : 'fare';
 
+  // Never re-send when a transfer for this (ride, kind) already settled on
+  // chain: the driver has the money and only Pi's bookkeeping is out of sync.
+  // payoutDriver refuses this too, but returning a real error here tells the
+  // operator why nothing happened instead of looking like a silent no-op.
+  const existingTxid = kind === 'fare' ? ride.driverPayoutTxid : ride.tipPayoutTxid;
+  if (existingTxid) {
+    res.status(409).json({
+      error: 'Funds already transferred for this payout — retrying would pay twice',
+      txid: existingTxid,
+      status: kind === 'fare' ? ride.driverPayoutStatus : ride.tipPayoutStatus,
+    });
+    return;
+  }
+
   if (kind === 'fare') {
     if (ride.driverPayoutPiId) await piCancelPayment(ride.driverPayoutPiId).catch(() => undefined);
     if (['pending', 'failed', 'no_wallet_configured'].includes(ride.driverPayoutStatus ?? '')) {
@@ -77,22 +91,29 @@ export async function getUnpaidPayouts(req: Request, res: Response): Promise<voi
   const now = Date.now();
   const isStuck = (status: string | undefined, updatedAt: string | undefined): boolean => {
     if (!status) return true;
-    if (status === 'failed' || status === 'no_wallet_configured') return true;
+    // 'sent_unconfirmed' is money that already left the wallet — it belongs in
+    // this list so an operator can see it, but it must never be offered a
+    // plain retry (see `retryable` below), or they would pay the driver twice.
+    if (status === 'failed' || status === 'no_wallet_configured' || status === 'sent_unconfirmed') return true;
     if (status !== 'pending') return false;
     return now - new Date(updatedAt ?? 0).getTime() > PENDING_STALE_MS;
   };
   type PayoutItem = {
     id: string; driverId: string | undefined; amount: number; fare: number;
     payoutStatus: string; payoutError?: string; createdAt: string; kind: 'fare' | 'tip';
+    // False when a transfer already settled on chain: the UI must not offer a
+    // retry, only reconciliation with Pi.
+    retryable: boolean;
+    txid?: string;
   };
   const items: PayoutItem[] = [];
   for (const r of rides) {
     if (r.status !== 'completed' || !r.driverId || r.paymentStatus !== 'completed') continue;
     if (isStuck(r.driverPayoutStatus, r.updatedAt)) {
-      items.push({ id: r.id, driverId: r.driverId, amount: r.driverEarnings, fare: r.fare, payoutStatus: r.driverPayoutStatus ?? 'missing', payoutError: r.driverPayoutError, createdAt: r.createdAt, kind: 'fare' });
+      items.push({ id: r.id, driverId: r.driverId, amount: r.driverEarnings, fare: r.fare, payoutStatus: r.driverPayoutStatus ?? 'missing', payoutError: r.driverPayoutError, createdAt: r.createdAt, kind: 'fare', retryable: !r.driverPayoutTxid, txid: r.driverPayoutTxid });
     }
     if (r.tipAmount && r.tipAmount > 0 && isStuck(r.tipPayoutStatus, r.updatedAt)) {
-      items.push({ id: r.id, driverId: r.driverId, amount: r.tipAmount, fare: r.fare, payoutStatus: r.tipPayoutStatus ?? 'missing', payoutError: r.tipPayoutError, createdAt: r.createdAt, kind: 'tip' });
+      items.push({ id: r.id, driverId: r.driverId, amount: r.tipAmount, fare: r.fare, payoutStatus: r.tipPayoutStatus ?? 'missing', payoutError: r.tipPayoutError, createdAt: r.createdAt, kind: 'tip', retryable: !r.tipPayoutTxid, txid: r.tipPayoutTxid });
     }
   }
   res.json(items);

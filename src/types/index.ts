@@ -120,7 +120,7 @@ export interface Ride {
   // A2U payout of the driver's share (fare minus platform fee) out of the app
   // wallet — separate from paymentStatus, which only tracks the passenger's
   // U2A payment into the app wallet.
-  driverPayoutStatus?: 'pending' | 'completed' | 'failed' | 'no_wallet_configured';
+  driverPayoutStatus?: 'pending' | 'completed' | 'failed' | 'no_wallet_configured' | 'sent_unconfirmed';
   driverPayoutTxid?: string;
   driverPayoutError?: string;
   // Pi's payment identifier for a failed attempt — lets an operator cancel
@@ -128,7 +128,7 @@ export interface Ride {
   // without having to parse it back out of the "ongoing_payment_found" error.
   driverPayoutPiId?: string;
   // A2U payout of a tip (100% to the driver, no platform fee).
-  tipPayoutStatus?: 'pending' | 'completed' | 'failed' | 'no_wallet_configured';
+  tipPayoutStatus?: 'pending' | 'completed' | 'failed' | 'no_wallet_configured' | 'sent_unconfirmed';
   tipPayoutTxid?: string;
   tipPayoutError?: string;
   tipPayoutPiId?: string;

@@ -308,6 +308,17 @@ export async function completePayment(req: Request, res: Response): Promise<void
 export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: number): Promise<void> {
   if (!ride.driverId || amount <= 0) return;
   const statusField = kind === 'fare' ? 'driverPayoutStatus' : 'tipPayoutStatus';
+  const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
+  // Checked before anything else, including the wallet-config branch below:
+  // a recorded txid means funds for this (ride, kind) already settled on chain.
+  // Nothing may overwrite that record — doing so would misfile a settled payout
+  // as awaiting one, and an operator acting on it would pay the driver twice.
+  if (ride[txidField]) {
+    logger.error('[Payout] refused — funds already transferred', {
+      rideId: ride.id, kind, txid: ride[txidField], status: ride[statusField],
+    });
+    return;
+  }
   if (!env.PI_WALLET_SEED) {
     await store().updateRide(ride.id, { [statusField]: 'no_wallet_configured' });
     logger.warn('[Payout] PI_WALLET_SEED not set — ride queued for manual payout', {
@@ -315,7 +326,6 @@ export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: num
     });
     return;
   }
-  const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
   // Synchronously claim this (rideId, kind) before any await — two concurrent
   // callers can't both pass has()→add() since there's no yield point between
   // them, so only the first proceeds to the DB check + Pi transfer below.
@@ -334,6 +344,16 @@ export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: num
       logger.warn('[Payout] skipped duplicate payout attempt', { rideId: ride.id, kind, status: fresh[statusField] });
       return;
     }
+    // Hard stop on paying twice: a recorded txid means a Stellar transfer for
+    // this (ride, kind) already settled, whatever the status says. This is the
+    // single chokepoint every payout goes through, so it protects the admin
+    // retry path and any future caller alike.
+    if (fresh?.[txidField]) {
+      logger.error('[Payout] refused re-send — funds already transferred', {
+        rideId: ride.id, kind, txid: fresh[txidField], status: fresh[statusField],
+      });
+      return;
+    }
     await store().updateRide(ride.id, { [statusField]: 'pending' });
     try {
       const { txid } = await payoutToUser(
@@ -349,8 +369,13 @@ export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: num
       const piPaymentIdFromFailure = (err as { piPaymentId?: string }).piPaymentId;
       const errorField = kind === 'fare' ? 'driverPayoutError' : 'tipPayoutError';
       const piIdField = kind === 'fare' ? 'driverPayoutPiId' : 'tipPayoutPiId';
+      // A txid on the error means the Stellar transfer already settled and only
+      // Pi's bookkeeping call failed — the driver HAS the money. Recording that
+      // as 'failed' would put the ride in the operator's unpaid queue, where a
+      // retry would pay them a second time. 'sent_unconfirmed' says: funds are
+      // gone, do not re-send, just reconcile with Pi.
       await store().updateRide(ride.id, {
-        [statusField]: 'failed',
+        [statusField]: txidFromPartialFailure ? 'sent_unconfirmed' : 'failed',
         [errorField]: (err as Error).message,
         ...(txidFromPartialFailure ? { [txidField]: txidFromPartialFailure } : {}),
         ...(piPaymentIdFromFailure ? { [piIdField]: piPaymentIdFromFailure } : {}),
