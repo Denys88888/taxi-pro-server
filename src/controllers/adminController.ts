@@ -302,8 +302,17 @@ export async function getAnalytics(_req: Request, res: Response): Promise<void> 
 // GET /api/admin/reports?status= — complaint queue.
 export async function listReports(req: Request, res: Response): Promise<void> {
   const status = req.query.status as 'open' | 'resolved' | 'dismissed' | undefined;
-  const reports = await store().listReports(status);
-  res.json({ reports });
+  const [reports, users] = await Promise.all([store().listReports(status), store().listUsers()]);
+  // Attach names so the moderator sees who complained about whom, not two
+  // opaque uids. Falls back to the uid if the user record is gone.
+  const names = new Map(users.map((u) => [u.uid, u.name]));
+  res.json({
+    reports: reports.map((r) => ({
+      ...r,
+      reporterName: names.get(r.reporterId) ?? r.reporterId,
+      reportedName: names.get(r.reportedId) ?? r.reportedId,
+    })),
+  });
 }
 
 // PATCH /api/admin/reports/:id — resolve or dismiss a report. Resolving one
