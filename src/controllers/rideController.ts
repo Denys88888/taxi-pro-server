@@ -178,6 +178,10 @@ async function partyFromUser(uid: string): Promise<RideParty | null> {
     model: u.driverInfo?.model,
     color: u.driverInfo?.color,
     number: u.driverInfo?.number,
+    // The plate and model alone make a rider check cars one by one at a busy
+    // pickup; the photo is how they spot the right one. Deliberately not
+    // licensePhoto — that is the driver's document, never the rider's business.
+    vehiclePhoto: u.driverInfo?.vehiclePhoto,
   };
 }
 
@@ -300,17 +304,26 @@ export async function updateRide(req: Request, res: Response): Promise<void> {
   // Passenger → driverRating/driverReview; driver → passengerRating/passengerReview.
   const isPassenger = ride.passengerId === uid;
   const allowed = isPassenger
-    ? (['driverRating', 'driverReview'] as const)
+    ? (['driverRating', 'driverReview', 'driverRatingBreakdown'] as const)
     : (['passengerRating', 'passengerReview'] as const);
-  const wantsRating = ['passengerRating', 'driverRating', 'passengerReview', 'driverReview'].some(
-    (k) => req.body[k] !== undefined
-  );
+  const wantsRating = [
+    'passengerRating',
+    'driverRating',
+    'passengerReview',
+    'driverReview',
+    'driverRatingBreakdown',
+  ].some((k) => req.body[k] !== undefined);
   if (wantsRating && ride.status !== 'completed') {
     res.status(409).json({ error: 'Can only rate a completed ride' });
     return;
   }
-  // Prevent double-rating — once submitted it cannot be changed.
-  if (isPassenger && ride.driverRating !== undefined && req.body.driverRating !== undefined) {
+  // Prevent double-rating — once submitted it cannot be changed. The breakdown
+  // is part of the same submission, so it is sealed by the same check.
+  if (
+    isPassenger &&
+    ride.driverRating !== undefined &&
+    (req.body.driverRating !== undefined || req.body.driverRatingBreakdown !== undefined)
+  ) {
     res.status(409).json({ error: 'Already rated this ride' });
     return;
   }

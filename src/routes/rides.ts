@@ -52,6 +52,14 @@ const updateSchema = z
       .optional(),
     passengerRating: z.number().min(1).max(5).optional(),
     driverRating: z.number().min(1).max(5).optional(),
+    driverRatingBreakdown: z
+      .object({
+        cleanliness: z.number().min(1).max(5).optional(),
+        driving: z.number().min(1).max(5).optional(),
+        route: z.number().min(1).max(5).optional(),
+      })
+      .strict()
+      .optional(),
     passengerReview: z.string().max(500).optional(),
     driverReview: z.string().max(500).optional(),
   })

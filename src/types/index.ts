@@ -143,6 +143,14 @@ export interface Ride {
   txid?: string;
   passengerRating?: number;
   driverRating?: number;
+  // Optional refinement of driverRating. The overall score is what feeds the
+  // driver's running average; these say what specifically was good or bad, so
+  // a three-star ride is actionable instead of just discouraging.
+  driverRatingBreakdown?: {
+    cleanliness?: number;
+    driving?: number;
+    route?: number;
+  };
   passengerReview?: string;
   driverReview?: string;
   cancelledBy?: Role;
@@ -166,6 +174,7 @@ export interface RideParty {
   model?: string;
   color?: string;
   number?: string;
+  vehiclePhoto?: string;
 }
 
 export interface Message {
