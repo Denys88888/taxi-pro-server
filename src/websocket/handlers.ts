@@ -329,6 +329,46 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       return;
     }
 
+    // ── In-app voice call signaling (WebRTC) ─────────────────────────────────
+    // The server only relays SDP/ICE between the two parties of a ride; the
+    // media itself flows peer-to-peer and never touches the server. This is how
+    // two people talk without either seeing the other's phone number — the
+    // tel: link that used to dial the real number is replaced by this.
+    case 'call_offer':
+    case 'call_answer':
+    case 'call_ice':
+    case 'call_end':
+    case 'call_decline': {
+      const rideId = String(msg.rideId ?? '');
+      const ride = await store().getRide(rideId);
+      if (!ride || (ride.passengerId !== uid && ride.driverId !== uid)) {
+        send(ws, { type: 'error', message: 'Not a participant of this ride', code: 'FORBIDDEN' });
+        return;
+      }
+      const otherId = ride.passengerId === uid ? ride.driverId : ride.passengerId;
+      if (!otherId) {
+        send(ws, { type: 'call_end', rideId, reason: 'no_counterpart' });
+        return;
+      }
+      // A call only makes sense while the ride is live. Starting one on a
+      // finished ride would let the parties reach each other indefinitely.
+      if (type === 'call_offer' && !['assigned', 'arrived', 'in_progress'].includes(ride.status)) {
+        send(ws, { type: 'call_end', rideId, reason: 'ride_inactive' });
+        return;
+      }
+      // Guard against oversized relayed blobs — a normal SDP is a few KB.
+      const sdp = typeof msg.sdp === 'string' && msg.sdp.length < 20000 ? msg.sdp : undefined;
+      const candidate =
+        msg.candidate && JSON.stringify(msg.candidate).length < 4000 ? msg.candidate : undefined;
+      const reason = typeof msg.reason === 'string' ? msg.reason.slice(0, 40) : undefined;
+      const delivered = sendToUser(otherId, { type, rideId, from: uid, sdp, candidate, reason });
+      // If the callee has no live socket, don't leave the caller ringing forever.
+      if (type === 'call_offer' && !delivered) {
+        send(ws, { type: 'call_end', rideId, reason: 'unavailable' });
+      }
+      return;
+    }
+
     default:
       send(ws, { type: 'error', message: `Unknown message type: ${type}`, code: 'UNKNOWN' });
   }
