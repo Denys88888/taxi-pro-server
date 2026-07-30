@@ -6,7 +6,7 @@ import { getSurge } from '../services/surgeService';
 import { releaseHeldPayment } from './paymentController';
 import { genId, nowIso, round } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
-import { LATE_CANCELLATION_FEE_PERCENT } from '../config/constants';
+import { LATE_CANCELLATION_FEE_PERCENT, FREE_CANCELLATION_AFTER_ARRIVAL_MIN } from '../config/constants';
 import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
 import { initialOffered } from '../services/scheduler';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty } from '../types';
@@ -370,8 +370,15 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
     res.status(409).json({ error: `Ride already ${ride.status}` });
     return;
   }
-  // Free before the driver arrives; percentage fee afterwards.
-  const feeApplies = ride.status === 'arrived' || ride.status === 'in_progress';
+  // Free before arrival, and for a grace window after arrival (the rider may be
+  // on their way out, or the driver may be at the wrong spot). A fee applies
+  // once the trip is in progress, or once the grace window has elapsed.
+  const graceMs = FREE_CANCELLATION_AFTER_ARRIVAL_MIN * 60 * 1000;
+  const withinGrace =
+    ride.status === 'arrived' &&
+    !!ride.arrivedAt &&
+    Date.now() - new Date(ride.arrivedAt).getTime() < graceMs;
+  const feeApplies = ride.status === 'in_progress' || (ride.status === 'arrived' && !withinGrace);
   const cancellationFee = feeApplies
     ? round((ride.fare * LATE_CANCELLATION_FEE_PERCENT) / 100)
     : 0;

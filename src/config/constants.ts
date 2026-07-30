@@ -25,6 +25,10 @@ export const FARE_TABLE: Record<
 
 // Cancellation fee after the driver has arrived (fraction of fare).
 export const LATE_CANCELLATION_FEE_PERCENT = 50;
+// Grace period after the driver marks "arrived": cancelling within this window
+// is still free (the rider may have stepped out, the driver may be at the wrong
+// spot). Matches the "5 free minutes" every major app gives.
+export const FREE_CANCELLATION_AFTER_ARRIVAL_MIN = 5;
 
 // Minimum requirements to register for each vehicle class — self-reported at
 // signup, checked here so a driver can't just pick "business" for the higher

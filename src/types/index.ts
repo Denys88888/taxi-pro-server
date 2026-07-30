@@ -133,6 +133,8 @@ export interface Ride {
   tipPayoutError?: string;
   tipPayoutPiId?: string;
   status: RideStatus;
+  // When the driver marked "arrived" — starts the free-cancellation grace window.
+  arrivedAt?: string;
   // Scheduled rides: ISO time the ride should be dispatched. Absent = immediate.
   scheduledAt?: string;
   // inDriver-style negotiation: passenger's asking price + collected driver bids.

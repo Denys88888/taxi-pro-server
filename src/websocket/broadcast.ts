@@ -16,6 +16,11 @@ export interface AuthedSocket extends WebSocket {
   chatId?: string;
   lastMessageAt?: number;
   isAlive?: boolean;
+  // Sliding-window message counter for the generic WS flood guard.
+  msgWindowStart?: number;
+  msgCount?: number;
+  // Timestamp of the last accepted driver_location, for the teleport check.
+  lastLocationAt?: number;
 }
 
 // Live connection registries (transient, per-process).

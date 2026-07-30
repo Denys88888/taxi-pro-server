@@ -5,7 +5,7 @@ import { pushToUser } from '../services/fcmService';
 import { calculateFare } from '../services/fareCalculator';
 import { getRouteInfo } from '../services/routingService';
 import { getSurge } from '../services/surgeService';
-import { genId, nowIso } from '../utils/helpers';
+import { genId, nowIso, haversineKm } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
 import { initialOffered } from '../services/scheduler';
@@ -39,9 +39,37 @@ function notifyRideParties(ride: Ride, payload: unknown): void {
 }
 
 // Dispatch a single decoded client message. `ws` is already authenticated.
+// Generic per-connection flood guard. The chat path has its own 1-msg/2s limit;
+// this stops a client spamming any *other* message type (driver_location,
+// ride_request, offers) thousands of times a second to exhaust the process.
+// ping (cheap heartbeat) and the call_* signaling (WebRTC emits ICE candidates
+// in bursts while connecting) are exempt so normal traffic is never throttled.
+const WS_FLOOD_WINDOW_MS = 1000;
+const WS_FLOOD_MAX = 40; // generous: driver_location is ~1/3s, this only trips on abuse
+const WS_FLOOD_KILL = 200; // sustained flood at this rate = malicious, drop the socket
+const FLOOD_EXEMPT = new Set(['ping', 'call_offer', 'call_answer', 'call_ice', 'call_end', 'call_decline']);
+
+function floodLimited(ws: AuthedSocket, type: string): boolean {
+  if (FLOOD_EXEMPT.has(type)) return false;
+  const now = Date.now();
+  if (!ws.msgWindowStart || now - ws.msgWindowStart > WS_FLOOD_WINDOW_MS) {
+    ws.msgWindowStart = now;
+    ws.msgCount = 0;
+  }
+  ws.msgCount = (ws.msgCount ?? 0) + 1;
+  if (ws.msgCount > WS_FLOOD_KILL) {
+    logger.warn('[WS] flood — terminating socket', { uid: ws.userId, count: ws.msgCount });
+    ws.terminate();
+    return true;
+  }
+  return ws.msgCount > WS_FLOOD_MAX;
+}
+
 export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknown>): Promise<void> {
   const type = String(msg.type ?? '');
   const uid = ws.userId!;
+
+  if (floodLimited(ws, type)) return;
 
   switch (type) {
     case 'ping': {
@@ -253,7 +281,11 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: `Cannot transition from ${ride.status} to ${status}`, code: 'INVALID_TRANSITION' });
         return;
       }
-      const updated = await store().updateRide(rideId, { status });
+      // Stamp arrival time so cancellation can grant the free grace window.
+      const updated = await store().updateRide(rideId, {
+        status,
+        ...(status === 'arrived' ? { arrivedAt: nowIso() } : {}),
+      });
       notifyRideParties(updated ?? ride, {
         type: 'ride_status_update',
         rideId,
@@ -276,6 +308,20 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       const lat = Number(msg.lat);
       const lng = Number(msg.lng);
       if (Number.isNaN(lat) || Number.isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+      // Teleport guard: reject a jump that implies an impossible ground speed
+      // (>200 km/h), the signature of a spoofed or garbage GPS fix. Real travel,
+      // including motorway speeds, stays well under this; a first fix (no prior)
+      // is always accepted.
+      const nowLoc = Date.now();
+      if (ws.driverLocation && ws.lastLocationAt) {
+        const km = haversineKm(ws.driverLocation.lat, ws.driverLocation.lng, lat, lng);
+        const hours = (nowLoc - ws.lastLocationAt) / 3_600_000;
+        if (hours > 0 && km / hours > 200) {
+          logger.warn('[WS] rejected implausible location jump', { uid, kmh: Math.round(km / hours) });
+          return;
+        }
+      }
+      ws.lastLocationAt = nowLoc;
       // Update the live socket first (dispatch reads it synchronously),
       // then persist to the store.
       ws.driverLocation = { lat, lng };
