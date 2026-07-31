@@ -19,8 +19,12 @@ export interface AuthedSocket extends WebSocket {
   // Sliding-window message counter for the generic WS flood guard.
   msgWindowStart?: number;
   msgCount?: number;
-  // Timestamp of the last accepted driver_location, for the teleport check.
+  // Timestamp of the last accepted driver_location, for the teleport check and
+  // the auto-offline sweep.
   lastLocationAt?: number;
+  // True between driver_online and driver_offline — marks a socket the
+  // auto-offline heartbeat should watch for GPS silence.
+  driverOnline?: boolean;
 }
 
 // Live connection registries (transient, per-process).

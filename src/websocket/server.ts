@@ -13,6 +13,8 @@ import {
 } from './broadcast';
 
 const HEARTBEAT_MS = 30_000;
+// An online driver with no GPS update for this long is auto-set offline.
+const DRIVER_GPS_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Attach a WebSocket server to the existing HTTP server. Authentication happens
 // at the handshake via the Sec-WebSocket-Protocol header (`jwt, <token>`), which
@@ -118,8 +120,34 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
 
   // Heartbeat: terminate connections that stop responding to pings.
   const interval = setInterval(() => {
+    const now = Date.now();
     for (const client of wss.clients) {
       const ws = client as AuthedSocket;
+      // Auto-offline: an online driver whose GPS has gone silent for too long
+      // (app backgrounded/killed, connection wedged but not yet dropped, phone
+      // asleep) is still shown as available and keeps getting ride offers they
+      // can't answer. Flip them offline so dispatch stops routing to them.
+      if (
+        ws.driverOnline &&
+        ws.isAlive !== false &&
+        now - (ws.lastLocationAt ?? 0) > DRIVER_GPS_TIMEOUT_MS
+      ) {
+        ws.driverOnline = false;
+        void (async () => {
+          try {
+            const u = await store().getUser(ws.userId!);
+            if (u?.driverInfo?.isOnline) {
+              await store().updateUser(ws.userId!, {
+                driverInfo: { ...u.driverInfo, isOnline: false },
+              });
+            }
+          } catch {
+            /* best effort — the socket-level flag is already flipped */
+          }
+        })();
+        send(ws, { type: 'ride_status_update', rideId: '', status: 'offline', data: { reason: 'gps_timeout' } });
+        logger.info('[WS] auto-offline (GPS silent)', { uid: ws.userId });
+      }
       if (ws.isAlive === false) {
         ws.terminate();
         continue;

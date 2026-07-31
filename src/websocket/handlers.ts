@@ -111,6 +111,8 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       // actually registered/driving as AND within radius of pickup.
       ws.vehicleType = resolvedVehicleType;
       ws.driverLocation = { lat: p.lat, lng: p.lng };
+      ws.driverOnline = true;
+      ws.lastLocationAt = Date.now();
       send(ws, { type: 'ride_status_update', rideId: '', status: 'online', data: {} });
       return;
     }
@@ -122,6 +124,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
           driverInfo: { ...user.driverInfo, isOnline: false },
         });
       }
+      ws.driverOnline = false;
       send(ws, { type: 'ride_status_update', rideId: '', status: 'offline', data: {} });
       return;
     }
