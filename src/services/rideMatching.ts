@@ -1,5 +1,5 @@
 import { store } from '../models';
-import { haversineKm } from '../utils/helpers';
+import { haversineKm, isApprovedDriver } from '../utils/helpers';
 import {
   DEFAULT_SEARCH_RADIUS_KM,
   EXTENDED_SEARCH_RADIUS_KM,
@@ -22,6 +22,10 @@ export async function findNearbyDrivers(
 
   const within = (radius: number): NearbyDriver[] =>
     online
+      // Belt-and-braces: the online gates already require approval, but a
+      // driver rejected *after* going online keeps isOnline=true in the store
+      // until they reconnect. Never surface them as an available car.
+      .filter((d) => isApprovedDriver(d.driverInfo))
       .filter((d) => d.driverInfo?.lastLocation)
       .filter((d) => !vehicleType || d.driverInfo?.vehicleType === vehicleType)
       .map((d) => {

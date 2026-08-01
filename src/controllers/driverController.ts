@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
 import { findNearbyDrivers } from '../services/rideMatching';
-import { nowIso, round } from '../utils/helpers';
+import { nowIso, round, isApprovedDriver } from '../utils/helpers';
 import type { DriverInfo, GeoPoint, VehicleType } from '../types';
 
 // POST /api/drivers/register — become a driver (submits vehicle details for review).
@@ -82,7 +82,7 @@ export async function nearbyDrivers(req: Request, res: Response): Promise<void> 
 // POST /api/drivers/online — go online (must be a verified driver).
 export async function goOnline(req: Request, res: Response): Promise<void> {
   const user = await store().getUser(req.user!.uid);
-  if (!user?.driverInfo?.licenseVerified) {
+  if (!user?.driverInfo || !isApprovedDriver(user.driverInfo)) {
     res.status(403).json({ error: 'Driver not verified' });
     return;
   }

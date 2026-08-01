@@ -1,4 +1,16 @@
 import crypto from 'crypto';
+import type { DriverInfo } from '../types';
+
+// A driver may go online / accept rides only once an admin has approved them.
+// applicationStatus is the field of record, but drivers approved before it
+// existed only carry licenseVerified — read that as 'approved' so a legacy
+// driver isn't locked out. Every gate (WS driver_online, WS ride_accept,
+// REST /drivers/online) must go through here so they can't drift apart.
+export function isApprovedDriver(info?: DriverInfo): boolean {
+  if (!info) return false;
+  const status = info.applicationStatus ?? (info.licenseVerified ? 'approved' : 'pending');
+  return status === 'approved';
+}
 
 // Great-circle distance between two lat/lng points, in kilometres.
 export function haversineKm(

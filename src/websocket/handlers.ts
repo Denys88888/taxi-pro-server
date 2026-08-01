@@ -5,7 +5,7 @@ import { pushToUser } from '../services/fcmService';
 import { calculateFare } from '../services/fareCalculator';
 import { getRouteInfo } from '../services/routingService';
 import { getSurge } from '../services/surgeService';
-import { genId, nowIso, haversineKm } from '../utils/helpers';
+import { genId, nowIso, haversineKm, isApprovedDriver } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
 import { initialOffered } from '../services/scheduler';
@@ -85,9 +85,25 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Not a registered driver', code: 'NOT_DRIVER' });
         return;
       }
+      // Same approval gate REST /drivers/online enforces. Without it an
+      // unapproved driver could go online over the socket, show up as an
+      // available car in /drivers/nearby and receive ride offers they are
+      // then refused at ride_accept — a phantom car on the passenger's map.
+      if (!isApprovedDriver(user.driverInfo)) {
+        send(ws, { type: 'error', message: 'Driver not verified', code: 'NOT_VERIFIED' });
+        return;
+      }
+      if (user.isBlocked) {
+        send(ws, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+        return;
+      }
       // Only enforce once the driver has actually been rated a few times —
       // a brand-new driver's default rating must never block their first rides.
       const settings = await store().getSettings();
+      if (settings.maintenanceMode) {
+        send(ws, { type: 'error', message: 'Ordering is temporarily disabled for maintenance', code: 'MAINTENANCE' });
+        return;
+      }
       if ((user.ratingCount ?? 0) >= 3 && user.rating < settings.minDriverRating) {
         send(ws, {
           type: 'error',
@@ -204,7 +220,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
         return;
       }
-      if (driver.driverInfo.applicationStatus !== 'approved') {
+      if (!isApprovedDriver(driver.driverInfo)) {
         send(ws, { type: 'error', message: 'Driver not verified', code: 'NOT_VERIFIED' });
         return;
       }
@@ -334,9 +350,15 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
           driverInfo: { ...driver.driverInfo, lastLocation: { lat, lng } },
         });
       }
-      const ride = await store().getRide(rideId);
-      if (ride) {
-        sendToUser(ride.passengerId, { type: 'driver_location_update', rideId, lat, lng });
+      // rideId is optional: an idle online driver pings location with no ride
+      // attached (that ping is what keeps them from being auto-set offline).
+      // Looking up an empty document id throws in Firestore, so only resolve
+      // the ride when there is one to forward the position to.
+      if (rideId) {
+        const ride = await store().getRide(rideId);
+        if (ride) {
+          sendToUser(ride.passengerId, { type: 'driver_location_update', rideId, lat, lng });
+        }
       }
       return;
     }
