@@ -4,7 +4,7 @@ import { calculateFare } from '../services/fareCalculator';
 import { getRouteInfo } from '../services/routingService';
 import { getSurge } from '../services/surgeService';
 import { releaseHeldPayment } from './paymentController';
-import { genId, nowIso, round } from '../utils/helpers';
+import { genId, nowIso, round, isApprovedDriver } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
 import { LATE_CANCELLATION_FEE_PERCENT, FREE_CANCELLATION_AFTER_ARRIVAL_MIN } from '../config/constants';
 import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
@@ -84,6 +84,9 @@ export async function createRide(req: Request, res: Response): Promise<void> {
     paymentStatus: 'pending',
     status: isScheduled ? 'scheduled' : 'searching',
     ...(scheduledAt ? { scheduledAt } : {}),
+    // Only an immediate ride starts searching now; a scheduled one gets this
+    // stamped by the dispatcher when it promotes the ride.
+    ...(isScheduled ? {} : { searchStartedAt: nowIso() }),
     ...(negotiable ? { negotiable: true, offeredFare: round(offeredFare ?? breakdown.fare), offers: [] } : {}),
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -130,7 +133,11 @@ export async function listOpenRides(req: Request, res: Response): Promise<void> 
     .filter(
       (r) =>
         r.passengerId !== req.user!.uid &&
-        new Date(r.createdAt).getTime() >= since &&
+        // Freshness is measured from when the ride started looking for a
+        // driver. A scheduled ride booked this morning and dispatched just now
+        // is a brand-new request; judging it by createdAt hid it from every
+        // driver who came online after it was promoted.
+        new Date(r.searchStartedAt ?? r.createdAt).getTime() >= since &&
         (!r.scheduledAt || new Date(r.scheduledAt).getTime() <= Date.now())
     )
     .slice(0, 20);
@@ -232,9 +239,21 @@ export async function submitOffer(req: Request, res: Response): Promise<void> {
     return;
   }
   const driver = await store().getUser(req.user!.uid);
-  // Only a verified/approved driver may bid — mirrors the ride_accept WS guard.
-  if (!driver?.driverInfo || driver.driverInfo.applicationStatus !== 'approved') {
+  // Same gates as the ride_accept WS handler, and through the same helper so
+  // they cannot drift apart again: a bid is an offer to take the ride, so a
+  // driver who can't accept must not be able to bid either. Reading
+  // applicationStatus directly here used to lock out drivers approved before
+  // that field existed — they carry only licenseVerified.
+  if (!driver?.driverInfo || !isApprovedDriver(driver.driverInfo)) {
     res.status(403).json({ error: 'Only approved drivers can submit offers' });
+    return;
+  }
+  if (driver.isBlocked) {
+    res.status(403).json({ error: 'Account blocked' });
+    return;
+  }
+  if (!driver.driverInfo.isOnline) {
+    res.status(409).json({ error: 'You are offline' });
     return;
   }
   const offers = (ride.offers ?? []).filter((o) => o.driverId !== req.user!.uid);

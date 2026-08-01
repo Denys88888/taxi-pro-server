@@ -1,4 +1,5 @@
 import { store } from '../models';
+import { nowIso } from '../utils/helpers';
 import { broadcastToDriversOfType, sendToUser } from '../websocket/broadcast';
 import { releaseHeldPayment } from '../controllers/paymentController';
 import { pushToUser } from './fcmService';
@@ -33,7 +34,10 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
       for (const ride of scheduled) {
         try {
           if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
-            const updated = await store().updateRide(ride.id, { status: 'searching' });
+            const updated = await store().updateRide(ride.id, {
+              status: 'searching',
+              searchStartedAt: nowIso(),
+            });
             const offered = broadcastToDriversOfType(
               { type: 'ride_available', ride: updated ?? ride },
               ride.vehicleType,
@@ -68,12 +72,14 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
       }
       for (const ride of searching) {
         try {
-          // Age from updatedAt, not createdAt — for a scheduled ride,
-          // createdAt is when the passenger booked it (could be hours ago),
-          // while updatedAt was refreshed by the promotion to 'searching'.
-          // Using createdAt would immediately trigger the extended broadcast
-          // on the same tick a scheduled ride was promoted (double-notify).
-          const searchStartedAt = new Date(ride.updatedAt ?? ride.createdAt).getTime();
+          // Age from when the search actually began, never from createdAt —
+          // for a scheduled ride createdAt is when the passenger booked it,
+          // which can be hours or days earlier. searchStartedAt is stamped the
+          // moment a ride enters 'searching'; rides created before that field
+          // existed fall back to updatedAt (refreshed by the promotion).
+          const searchStartedAt = new Date(
+            ride.searchStartedAt ?? ride.updatedAt ?? ride.createdAt
+          ).getTime();
           const age = now - searchStartedAt;
           if (
             age > DRIVER_OFFER_TIMEOUT_MS &&
@@ -93,7 +99,11 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
               radiusKm: settings.extendedSearchRadiusKm,
             });
           }
-          if (now - new Date(ride.createdAt).getTime() > SEARCH_TIMEOUT_MS) {
+          // Same basis as `age` above. Reading createdAt here meant a ride
+          // booked more than SEARCH_TIMEOUT_MS in advance was auto-cancelled
+          // on the very next tick after being dispatched — no driver ever got
+          // a chance to take it, which broke scheduled rides outright.
+          if (age > SEARCH_TIMEOUT_MS) {
             if (ride.paymentStatus === 'held' && ride.paymentId) {
               await releaseHeldPayment(ride.paymentId);
             }

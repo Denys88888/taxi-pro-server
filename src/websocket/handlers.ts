@@ -184,6 +184,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         surgeMultiplier: surge.multiplier,
         paymentStatus: 'pending',
         status: 'searching',
+        searchStartedAt: nowIso(),
         createdAt: nowIso(),
         updatedAt: nowIso(),
       };

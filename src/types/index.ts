@@ -137,6 +137,13 @@ export interface Ride {
   arrivedAt?: string;
   // Scheduled rides: ISO time the ride should be dispatched. Absent = immediate.
   scheduledAt?: string;
+  // When the ride actually entered 'searching' and drivers started being
+  // offered it. For an immediate ride that is creation time, but for a
+  // scheduled one it is the moment the dispatcher promoted it — hours after
+  // createdAt. Every "how long has this been looking for a driver" decision
+  // must read this, never createdAt, or a ride booked in advance is treated
+  // as having already waited its whole timeout the instant it goes out.
+  searchStartedAt?: string;
   // inDriver-style negotiation: passenger's asking price + collected driver bids.
   negotiable?: boolean;
   offeredFare?: number;
