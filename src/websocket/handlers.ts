@@ -224,6 +224,13 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         send(ws, { type: 'error', message: 'Driver not verified', code: 'NOT_VERIFIED' });
         return;
       }
+      // Off-shift drivers must not take rides. Nothing clears isOnline during a
+      // ride, so this only ever catches a driver who really did go offline (or
+      // was swept offline for GPS silence) and still had a stale offer on screen.
+      if (!driver.driverInfo.isOnline) {
+        send(ws, { type: 'error', message: 'You are offline', code: 'OFFLINE' });
+        return;
+      }
       const ride = await store().getRide(rideId);
       if (!ride) {
         send(ws, { type: 'error', message: 'Ride not found', code: 'NO_RIDE' });

@@ -120,6 +120,10 @@ export function broadcastToDriversOfType(
   for (const [uid, ws] of userSockets.entries()) {
     if (ws.readyState !== WebSocket.OPEN) continue;
     if (ws.role !== 'driver') continue;
+    // Only drivers who are actually on shift. vehicleType alone is set from
+    // the stored profile at connect, so without this an off-shift driver with
+    // the app merely open collected every ride offer — and could accept one.
+    if (ws.driverOnline !== true) continue;
     if (!ws.vehicleType || !canServe(ws.vehicleType, vehicleType)) continue;
     if (excludeUids && excludeUids.has(uid)) continue;
     if (pickup && radiusKm !== undefined && ws.driverLocation) {

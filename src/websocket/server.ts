@@ -4,6 +4,7 @@ import { URL } from 'url';
 import { verifyToken } from '../utils/jwt';
 import { store } from '../models';
 import { logger } from '../utils/logger';
+import { isApprovedDriver } from '../utils/helpers';
 import { handleMessage } from './handlers';
 import {
   registerSocket,
@@ -64,6 +65,8 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
     // never receives ride_available broadcasts until they re-login.
     let role = payload.role;
     let vehicleType;
+    let driverOnline = false;
+    let lastLocation;
     try {
       const user = await store().getUser(payload.uid);
       if (user?.isBlocked) {
@@ -73,6 +76,13 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
       }
       if (user) role = user.role;
       vehicleType = user?.driverInfo?.vehicleType;
+      // Seed the live online state from the store rather than assuming offline.
+      // A working driver whose socket drops and reconnects (tunnel, cell
+      // handover, backgrounded app) must keep receiving offers without having
+      // to toggle the switch again — and a driver who is stored-offline must
+      // not receive any, which is what dispatch now filters on.
+      driverOnline = role === 'driver' && isApprovedDriver(user?.driverInfo) && user?.driverInfo?.isOnline === true;
+      lastLocation = user?.driverInfo?.lastLocation;
     } catch {
       /* store unavailable — fall through on the valid token */
     }
@@ -80,6 +90,13 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
     ws.userId = payload.uid;
     ws.role = role;
     ws.vehicleType = vehicleType;
+    ws.driverOnline = driverOnline;
+    // Without this the reconnected driver has no known position until their
+    // next GPS ping, and radius filtering would silently drop them.
+    if (driverOnline && lastLocation) ws.driverLocation = lastLocation;
+    // Start the auto-offline clock now, not at epoch, or a driver who
+    // reconnects is swept offline by the very next heartbeat.
+    if (driverOnline) ws.lastLocationAt = Date.now();
     ws.isAlive = true;
     registerSocket(payload.uid, ws);
     send(ws, { type: 'authenticated', userId: payload.uid, role });
