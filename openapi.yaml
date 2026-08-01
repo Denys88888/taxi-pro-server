@@ -363,7 +363,25 @@ paths:
   /api/rides/surge:
     get:
       tags: [Rides]
-      summary: Get current surge multiplier and active ride count
+      summary: Surge multiplier for a pickup point at a given time
+      description: >
+        The price preview shown before ordering. Bands follow the local clock at
+        the pickup point, so `at` must be sent when the passenger is booking
+        ahead — otherwise the quote is priced by a different clock than the fare
+        they will be charged. A missing, malformed or past `at` means "now".
+      parameters:
+        - in: query
+          name: lat
+          schema: { type: number }
+          description: Pickup latitude. Without coordinates only time-of-day bands apply.
+        - in: query
+          name: lng
+          schema: { type: number }
+          description: Pickup longitude.
+        - in: query
+          name: at
+          schema: { type: string, format: date-time }
+          description: ISO time the ride is for. Omit for an immediate ride.
       responses:
         '200':
           description: Surge info
@@ -372,8 +390,12 @@ paths:
               schema:
                 type: object
                 properties:
-                  surgeMultiplier: { type: number }
-                  activeRides: { type: integer }
+                  multiplier:
+                    type: number
+                    description: 1.0 normal · 1.3 peak · 1.5 rain/snow · 2.0 night/holiday.
+                  reason:
+                    type: string
+                    enum: [normal, peak, weather, night, holiday]
 
   /api/rides/open:
     get:

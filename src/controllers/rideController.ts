@@ -80,7 +80,12 @@ export async function createRide(req: Request, res: Response): Promise<void> {
   const path = [pickup, ...(stops ?? []), destination];
   const [routeInfo, surge] = await Promise.all([
     getRouteInfo(path),
-    settings.surgeEnabled !== false ? getSurge(pickup) : Promise.resolve({ multiplier: 1, reason: 'normal' as const }),
+    // Priced by the clock the ride runs on, not the clock the passenger booked
+    // on — otherwise a booking made late at night carries the night multiplier
+    // into the middle of the following afternoon, frozen, for good.
+    settings.surgeEnabled !== false
+      ? getSurge(pickup, isScheduled ? new Date(scheduledAt!) : undefined)
+      : Promise.resolve({ multiplier: 1, reason: 'normal' as const }),
   ]);
   const distanceKm = round(routeInfo.distanceKm);
   const durationMin = routeInfo.durationMin;
@@ -139,8 +144,11 @@ export async function createRide(req: Request, res: Response): Promise<void> {
   res.status(201).json(ride);
 }
 
-// GET /api/rides/surge?lat=&lng= — current surge multiplier at a point (or
-// time-only if no coords). Shown to the passenger before ordering.
+// GET /api/rides/surge?lat=&lng=&at= — the surge multiplier at a point (or
+// time-only if no coords). Shown to the passenger before ordering. `at` is the
+// ISO time the ride is for; it must be passed when the passenger is booking
+// ahead, or the quote on screen is priced by a different clock than the fare
+// they are about to be charged.
 export async function getSurgeInfo(req: Request, res: Response): Promise<void> {
   const settings = await store().getSettings();
   if (settings.surgeEnabled === false) {
@@ -150,7 +158,11 @@ export async function getSurgeInfo(req: Request, res: Response): Promise<void> {
   const lat = Number(req.query.lat);
   const lng = Number(req.query.lng);
   const point = Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined;
-  res.json(await getSurge(point));
+  // A malformed or past `at` falls back to now rather than 400ing: this only
+  // feeds a price preview, and no quote at all is worse than one for now.
+  const at = typeof req.query.at === 'string' ? new Date(req.query.at) : undefined;
+  const validAt = at && !Number.isNaN(at.getTime()) && at.getTime() > Date.now() ? at : undefined;
+  res.json(await getSurge(point, validAt));
 }
 
 // GET /api/rides/open — open requests for drivers coming online: 'searching'
