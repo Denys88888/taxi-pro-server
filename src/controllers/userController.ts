@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
-import { nowIso } from '../utils/helpers';
+import { nowIso, isApprovedDriver } from '../utils/helpers';
 import type { User, Role, SavedAddress } from '../types';
 
 // Reconstruct a minimal user record from the verified JWT identity. Used when the
@@ -50,7 +50,10 @@ export async function switchRole(req: Request, res: Response): Promise<void> {
   const user = await ensureUser(req);
 
   if (role === 'driver') {
-    if (!user.driverInfo || user.driverInfo.applicationStatus !== 'approved') {
+    // Through the shared helper, not the raw field: a driver approved before
+    // applicationStatus existed carries only licenseVerified, and reading the
+    // field directly refused to let them switch into the driver role at all.
+    if (!isApprovedDriver(user.driverInfo)) {
       res.status(400).json({ error: 'Driver registration not approved' });
       return;
     }

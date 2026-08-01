@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
-import { round } from '../utils/helpers';
+import { round, driverApprovalStatus } from '../utils/helpers';
 import { sendToUser, closeUserSocket } from '../websocket/broadcast';
 import { payoutDriver } from './paymentController';
 import { cancelPayment as piCancelPayment } from '../services/piService';
@@ -247,9 +247,7 @@ export async function listDrivers(req: Request, res: Response): Promise<void> {
     .filter((u) => u.driverInfo)
     .map((u) => ({
       ...u,
-      applicationStatus:
-        u.driverInfo!.applicationStatus ??
-        (u.driverInfo!.licenseVerified ? 'approved' : 'pending'),
+      applicationStatus: driverApprovalStatus(u.driverInfo),
     }));
   res.json({
     drivers: filter ? drivers.filter((d) => d.applicationStatus === filter) : drivers,

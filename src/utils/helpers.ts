@@ -1,15 +1,20 @@
 import crypto from 'crypto';
-import type { DriverInfo } from '../types';
+import type { DriverInfo, DriverApplicationStatus } from '../types';
 
-// A driver may go online / accept rides only once an admin has approved them.
-// applicationStatus is the field of record, but drivers approved before it
-// existed only carry licenseVerified — read that as 'approved' so a legacy
-// driver isn't locked out. Every gate (WS driver_online, WS ride_accept,
-// REST /drivers/online) must go through here so they can't drift apart.
+// Where a driver's application actually stands. applicationStatus is the field
+// of record, but drivers approved before it existed carry only licenseVerified
+// — read that as 'approved' so a legacy driver isn't locked out. Anything that
+// needs to know the review state reads it from here, never from the raw
+// fields, so the answer can't differ between two places in the codebase.
+export function driverApprovalStatus(info?: DriverInfo): DriverApplicationStatus {
+  if (!info) return 'pending';
+  return info.applicationStatus ?? (info.licenseVerified ? 'approved' : 'pending');
+}
+
+// A driver may go online, accept rides, bid on them and hold the driver role
+// only once an admin has approved them. Every such gate goes through here.
 export function isApprovedDriver(info?: DriverInfo): boolean {
-  if (!info) return false;
-  const status = info.applicationStatus ?? (info.licenseVerified ? 'approved' : 'pending');
-  return status === 'approved';
+  return driverApprovalStatus(info) === 'approved';
 }
 
 // Great-circle distance between two lat/lng points, in kilometres.

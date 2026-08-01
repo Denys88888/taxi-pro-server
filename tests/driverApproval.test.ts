@@ -1,4 +1,7 @@
-import { isApprovedDriver } from '../src/utils/helpers';
+import request from 'supertest';
+import { createApp } from '../src/app';
+import { signToken } from '../src/utils/jwt';
+import { isApprovedDriver, driverApprovalStatus } from '../src/utils/helpers';
 import { findNearbyDrivers } from '../src/services/rideMatching';
 import { store } from '../src/models';
 import type { DriverInfo, User } from '../src/types';
@@ -53,6 +56,106 @@ describe('isApprovedDriver', () => {
 
   it('rejects a legacy record that was never verified', () => {
     expect(isApprovedDriver(baseInfo())).toBe(false);
+  });
+});
+
+describe('driverApprovalStatus', () => {
+  // The admin driver list reports the review state rather than a yes/no, and
+  // used to compute the legacy fallback with its own copy of the rule. Both now
+  // come from here, so the list can never disagree with the gates.
+  it('reports the stored status when there is one', () => {
+    expect(driverApprovalStatus(baseInfo({ applicationStatus: 'rejected' }))).toBe('rejected');
+    expect(driverApprovalStatus(baseInfo({ applicationStatus: 'pending' }))).toBe('pending');
+  });
+
+  it('infers approved from a legacy licenseVerified record', () => {
+    expect(driverApprovalStatus(baseInfo({ licenseVerified: true }))).toBe('approved');
+  });
+
+  it('treats a missing record as pending', () => {
+    expect(driverApprovalStatus(undefined)).toBe('pending');
+    expect(driverApprovalStatus(baseInfo())).toBe('pending');
+  });
+
+  it('agrees with isApprovedDriver on every shape', () => {
+    const shapes: (DriverInfo | undefined)[] = [
+      undefined,
+      baseInfo(),
+      baseInfo({ licenseVerified: true }),
+      baseInfo({ applicationStatus: 'pending' }),
+      baseInfo({ applicationStatus: 'approved' }),
+      baseInfo({ applicationStatus: 'rejected', licenseVerified: true }),
+    ];
+    for (const info of shapes) {
+      expect(isApprovedDriver(info)).toBe(driverApprovalStatus(info) === 'approved');
+    }
+  });
+});
+
+describe('switching into the driver role', () => {
+  // Reading applicationStatus directly here refused a driver approved before
+  // that field existed — they could not become a driver in the app at all,
+  // which is the harshest version of this lockout.
+  const app = createApp();
+
+  const mkUser = (uid: string, info?: Partial<DriverInfo>): User => ({
+    uid,
+    role: 'passenger',
+    name: uid,
+    rating: 5,
+    ratingCount: 0,
+    isBlocked: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    ...(info ? { driverInfo: baseInfo(info) } : {}),
+  });
+
+  const authFor = (uid: string): { Authorization: string } => ({
+    Authorization: `Bearer ${signToken({ uid, role: 'passenger' })}`,
+  });
+
+  it('lets a legacy approved driver switch to the driver role', async () => {
+    await store().saveUser(mkUser('sw_legacy', { licenseVerified: true }));
+    const res = await request(app)
+      .post('/api/users/me/switch-role')
+      .set(authFor('sw_legacy'))
+      .send({ role: 'driver' });
+    expect(res.status).toBe(200);
+    expect(res.body.user.role).toBe('driver');
+  });
+
+  it('lets an explicitly approved driver switch', async () => {
+    await store().saveUser(
+      mkUser('sw_approved', { applicationStatus: 'approved', licenseVerified: true })
+    );
+    const res = await request(app)
+      .post('/api/users/me/switch-role')
+      .set(authFor('sw_approved'))
+      .send({ role: 'driver' });
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses an application still under review', async () => {
+    await store().saveUser(mkUser('sw_pending', { applicationStatus: 'pending' }));
+    const res = await request(app)
+      .post('/api/users/me/switch-role')
+      .set(authFor('sw_pending'))
+      .send({ role: 'driver' });
+    expect(res.status).toBe(400);
+  });
+
+  it('refuses a rejected application and someone who never applied', async () => {
+    await store().saveUser(
+      mkUser('sw_rejected', { applicationStatus: 'rejected', licenseVerified: true })
+    );
+    await store().saveUser(mkUser('sw_none'));
+    for (const uid of ['sw_rejected', 'sw_none']) {
+      const res = await request(app)
+        .post('/api/users/me/switch-role')
+        .set(authFor(uid))
+        .send({ role: 'driver' });
+      expect(res.status).toBe(400);
+    }
   });
 });
 
