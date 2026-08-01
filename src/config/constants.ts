@@ -68,3 +68,15 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export const MAX_MESSAGE_LENGTH = 500;
+
+// Scheduled rides. Booking ahead must not cost a passenger the ability to
+// order a taxi right now, but it can't be unlimited either — every pending
+// booking is a car the dispatcher has promised to find.
+export const MAX_PENDING_SCHEDULED_RIDES = 3;
+// Two bookings closer together than this would come due while the first is
+// still under way, so the second could only ever be dispatched late.
+export const SCHEDULED_MIN_GAP_MS = 30 * 60 * 1000;
+// How long a booking that has come due waits for the passenger's current ride
+// to finish before the dispatcher gives up on it. Past this it is cancelled
+// rather than sent out at a time the passenger never asked for.
+export const SCHEDULED_DISPATCH_GRACE_MS = 60 * 60 * 1000;

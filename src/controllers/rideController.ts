@@ -6,9 +6,15 @@ import { getSurge } from '../services/surgeService';
 import { releaseHeldPayment } from './paymentController';
 import { genId, nowIso, round, isApprovedDriver } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
-import { LATE_CANCELLATION_FEE_PERCENT, FREE_CANCELLATION_AFTER_ARRIVAL_MIN } from '../config/constants';
+import {
+  LATE_CANCELLATION_FEE_PERCENT,
+  FREE_CANCELLATION_AFTER_ARRIVAL_MIN,
+  MAX_PENDING_SCHEDULED_RIDES,
+  SCHEDULED_MIN_GAP_MS,
+} from '../config/constants';
 import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
 import { initialOffered } from '../services/scheduler';
+import { hasLiveRide } from '../services/activeRide';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty } from '../types';
 
 // POST /api/rides — create a ride request (server computes distance + fare).
@@ -25,13 +31,41 @@ export async function createRide(req: Request, res: Response): Promise<void> {
       offeredFare?: number;
       note?: string;
     };
-  // One active ride per passenger: reject if they already have a non-terminal
-  // ride, so the driver pool and the passenger's own tracking stay unambiguous.
-  const ACTIVE: RideStatus[] = ['scheduled', 'searching', 'assigned', 'arrived', 'in_progress'];
-  for (const st of ACTIVE) {
-    const { total } = await store().listRidesByUser(req.user!.uid, st, 1, 1);
-    if (total > 0) {
-      res.status(409).json({ error: 'You already have an active ride', code: 'ACTIVE_RIDE_EXISTS' });
+  // One ride *under way* per passenger, so the driver pool and the passenger's
+  // own tracking stay unambiguous. A ride merely booked for later does not
+  // count: refusing on it meant someone who scheduled a trip for tomorrow
+  // morning could not order a taxi today at all.
+  if (await hasLiveRide(req.user!.uid)) {
+    res.status(409).json({ error: 'You already have an active ride', code: 'ACTIVE_RIDE_EXISTS' });
+    return;
+  }
+
+  // Future-dated rides wait as 'scheduled'; the dispatcher promotes them when due.
+  const isScheduled = !!scheduledAt && new Date(scheduledAt).getTime() > Date.now();
+
+  // Bookings are cheap to make and expensive to keep, so they are capped, and
+  // two of them may not land on top of each other — the dispatcher can only
+  // send one at a time, so the second would go out late through no fault of
+  // the passenger's.
+  if (isScheduled) {
+    const { rides } = await store().listRidesByUser(req.user!.uid, 'scheduled', 1, 100);
+    const booked = rides.filter((r) => r.passengerId === req.user!.uid);
+    if (booked.length >= MAX_PENDING_SCHEDULED_RIDES) {
+      res.status(409).json({
+        error: `You can have at most ${MAX_PENDING_SCHEDULED_RIDES} scheduled rides`,
+        code: 'TOO_MANY_SCHEDULED',
+      });
+      return;
+    }
+    const at = new Date(scheduledAt!).getTime();
+    const clash = booked.some(
+      (r) => r.scheduledAt && Math.abs(new Date(r.scheduledAt).getTime() - at) < SCHEDULED_MIN_GAP_MS
+    );
+    if (clash) {
+      res.status(409).json({
+        error: 'You already have a ride booked around that time',
+        code: 'SCHEDULED_CONFLICT',
+      });
       return;
     }
   }
@@ -65,9 +99,6 @@ export async function createRide(req: Request, res: Response): Promise<void> {
     negotiable && offeredFare && offeredFare > 0
       ? { ...breakdown, fare: round(offeredFare), platformFee: round((offeredFare * breakdown.platformFeePercent) / 100), driverEarnings: round(offeredFare - (offeredFare * breakdown.platformFeePercent) / 100) }
       : breakdown;
-
-  // Future-dated rides wait as 'scheduled'; the dispatcher promotes them when due.
-  const isScheduled = !!scheduledAt && new Date(scheduledAt).getTime() > Date.now();
 
   const ride: Ride = {
     id: genId('ride'),

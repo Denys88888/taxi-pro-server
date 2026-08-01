@@ -330,6 +330,21 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Ride' }
+        '409':
+          description: >
+            Refused. `code` says which rule: ACTIVE_RIDE_EXISTS (a ride is
+            already under way — a ride merely booked for later does not count),
+            TOO_MANY_SCHEDULED (the pending-booking cap), or SCHEDULED_CONFLICT
+            (another booking is within 30 minutes of the requested time).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code:
+                    type: string
+                    enum: [ACTIVE_RIDE_EXISTS, TOO_MANY_SCHEDULED, SCHEDULED_CONFLICT]
         '429':
           description: Rate limit exceeded
     get:

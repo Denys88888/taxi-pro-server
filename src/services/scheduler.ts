@@ -4,7 +4,8 @@ import { broadcastToDriversOfType, sendToUser } from '../websocket/broadcast';
 import { releaseHeldPayment } from '../controllers/paymentController';
 import { pushToUser } from './fcmService';
 import { logger } from '../utils/logger';
-import { DRIVER_OFFER_TIMEOUT_MS } from '../config/constants';
+import { DRIVER_OFFER_TIMEOUT_MS, SCHEDULED_DISPATCH_GRACE_MS } from '../config/constants';
+import { hasLiveRide } from './activeRide';
 
 const SEARCH_TIMEOUT_MS = 15 * 60 * 1000;
 const ASSIGNED_TIMEOUT_MS = 15 * 60 * 1000;
@@ -34,6 +35,29 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
       for (const ride of scheduled) {
         try {
           if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
+            // Never dispatch a booking to a passenger who is already riding:
+            // two live rides at once puts two drivers on one person and leaves
+            // the passenger's screen with no single ride to track. It waits
+            // instead, and goes out on the first tick after they're free.
+            if (await hasLiveRide(ride.passengerId)) {
+              const overdue = now - new Date(ride.scheduledAt).getTime();
+              if (overdue > SCHEDULED_DISPATCH_GRACE_MS) {
+                // Their current trip outlasted the grace period. Sending a car
+                // an hour after the booked time is worse than not sending one,
+                // so the booking is dropped and the passenger told.
+                const updated = await store().updateRide(ride.id, { status: 'cancelled' });
+                sendToUser(ride.passengerId, {
+                  type: 'ride_status_update',
+                  rideId: ride.id,
+                  status: 'cancelled',
+                  ride: updated ?? ride,
+                });
+                logger.info('[Scheduler] dropped booking that never got a free slot', {
+                  rideId: ride.id,
+                });
+              }
+              continue;
+            }
             const updated = await store().updateRide(ride.id, {
               status: 'searching',
               searchStartedAt: nowIso(),
