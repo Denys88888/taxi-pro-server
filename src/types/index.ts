@@ -132,6 +132,11 @@ export interface Ride {
   tipPayoutTxid?: string;
   tipPayoutError?: string;
   tipPayoutPiId?: string;
+  // A2U payout of a late-cancellation fee (split like a fare).
+  feePayoutStatus?: 'pending' | 'completed' | 'failed' | 'no_wallet_configured' | 'sent_unconfirmed';
+  feePayoutTxid?: string;
+  feePayoutError?: string;
+  feePayoutPiId?: string;
   status: RideStatus;
   // When the driver marked "arrived" — starts the free-cancellation grace window.
   arrivedAt?: string;
@@ -165,6 +170,15 @@ export interface Ride {
   cancelledBy?: Role;
   cancellationReason?: string;
   cancellationFee?: number;
+  // A late-cancellation fee is a debt, not a capture. The fare is escrowed as a
+  // single Pi payment for the full amount and Pi has no partial capture, so the
+  // hold is released whole and the fee is collected as its own Pi payment the
+  // passenger approves afterwards. 'outstanding' until they do — and while it
+  // is outstanding they cannot book again, which is the only leverage the app
+  // has. Absent means nothing is owed.
+  cancellationFeeStatus?: 'outstanding' | 'paid';
+  cancellationFeePaymentId?: string;
+  cancellationFeeTxid?: string;
   shareToken?: string;
   createdAt: string;
   updatedAt: string;
@@ -199,8 +213,9 @@ export interface Message {
 export interface Payment {
   id: string;
   rideId: string;
-  // 'ride' = the fare itself (escrowed); 'tip' = a post-ride tip to the driver.
-  type?: 'ride' | 'tip';
+  // 'ride' = the fare itself (escrowed); 'tip' = a post-ride tip to the driver;
+  // 'fee' = a late-cancellation fee, settled after the fact.
+  type?: 'ride' | 'tip' | 'fee';
   amount: number;
   platformFeePercent: number;
   platformFee: number;

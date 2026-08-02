@@ -16,7 +16,9 @@ const router = Router();
 
 const createSchema = z.object({
   rideId: z.string().min(1),
-  type: z.enum(['ride', 'tip']).optional(),
+  type: z.enum(['ride', 'tip', 'fee']).optional(),
+  // Only a tip is priced by the client. A fare and a cancellation fee are both
+  // read off the ride, so an amount sent with either is ignored, not trusted.
   amount: z.number().positive().max(100).optional(),
 });
 const approveSchema = z.object({ piPaymentId: z.string().min(1) });

@@ -11,6 +11,7 @@ import {
   getRide,
   updateRide,
   cancelRide,
+  getOutstandingFee,
   shareRide,
   submitOffer,
   acceptOffer,
@@ -76,6 +77,8 @@ router.get('/', asyncHandler(listRides));
 // Static paths must precede '/:id'.
 router.get('/surge', asyncHandler(getSurgeInfo));
 router.get('/open', asyncHandler(listOpenRides));
+// Must stay above '/:id' — Express would otherwise read it as a ride id.
+router.get('/outstanding-fee', asyncHandler(getOutstandingFee));
 router.get('/heatmap', asyncHandler(getHeatmap));
 router.get('/:id', asyncHandler(getRide));
 router.patch('/:id', validate(updateSchema), asyncHandler(updateRide));

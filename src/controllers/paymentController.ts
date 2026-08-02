@@ -26,10 +26,11 @@ const payoutsInFlight = new Set<string>();
 // POST /api/payments — create a payment record before Pi.createPayment.
 // type 'ride' (default): the fare, escrowed (pending → held → completed).
 // type 'tip': a voluntary post-ride tip to the driver (requires amount).
+// type 'fee': a late-cancellation fee already recorded on a cancelled ride.
 export async function createPayment(req: Request, res: Response): Promise<void> {
   const { rideId, type = 'ride', amount } = req.body as {
     rideId: string;
-    type?: 'ride' | 'tip';
+    type?: 'ride' | 'tip' | 'fee';
     amount?: number;
   };
   const ride = await store().getRide(rideId);
@@ -41,16 +42,20 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
+  // Everything below the fare guards applies only to the fare itself. A tip and
+  // a cancellation fee are separate Pi transactions with their own rules — they
+  // are not the escrowed fare and must not be blocked by its state.
+  const isFare = type === 'ride';
   // Ride-level guard — checked before payment records to catch cases where
   // piComplete timed out (status saved as 'failed') but Pi actually completed
   // the transfer (txid exists on the ride). Without this, the passenger could
   // trigger a second Pi deduction on a ride that was already paid.
-  if (type !== 'tip' && (ride.paymentStatus === 'completed' || ride.txid)) {
+  if (isFare && (ride.paymentStatus === 'completed' || ride.txid)) {
     res.status(409).json({ error: 'Payment already completed' });
     return;
   }
 
-  if (type !== 'tip' && ride.paymentId) {
+  if (isFare && ride.paymentId) {
     const existing = await store().getPayment(ride.paymentId);
     if (existing && existing.status === 'approved') {
       // The fare was held (Pi escrow) but our completion call never landed —
@@ -81,11 +86,12 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
     // touched for it (no escrow hold, nothing to double-charge), so it's
     // safe to just let a fresh attempt through instead of blocking forever.
   }
-  if (type !== 'tip' && !['assigned', 'arrived', 'in_progress', 'completed'].includes(ride.status)) {
+  if (isFare && !['assigned', 'arrived', 'in_progress', 'completed'].includes(ride.status)) {
     res.status(409).json({ error: 'Ride not ready for payment' });
     return;
   }
-  if (type === 'tip') {
+  const isTip = type === 'tip';
+  if (isTip) {
     if (ride.status !== 'completed' || !ride.driverId) {
       res.status(409).json({ error: 'Tips are only possible after a completed ride' });
       return;
@@ -95,28 +101,66 @@ export async function createPayment(req: Request, res: Response): Promise<void> 
       return;
     }
   }
-  const isTip = type === 'tip';
-  const payAmount = isTip ? round(amount!) : ride.fare;
+  const isFee = type === 'fee';
+  if (isFee) {
+    // The amount is whatever cancelRide worked out and wrote down. It is never
+    // read from the request: the client already knows the figure, and letting
+    // it name its own would let a passenger settle a 3 π debt for 0.01 π.
+    if (ride.cancellationFeeStatus !== 'outstanding' || !(ride.cancellationFee! > 0)) {
+      res.status(409).json({ error: 'No cancellation fee is outstanding on this ride' });
+      return;
+    }
+    if (!ride.driverId) {
+      res.status(409).json({ error: 'Cancellation fee has no driver to pay' });
+      return;
+    }
+    if (ride.cancellationFeePaymentId) {
+      // An earlier attempt at the same debt. 'created' means our record was
+      // written but the wallet sheet never opened (app closed, no `payments`
+      // scope, connection dropped) — nothing exists on Pi's side, so a fresh
+      // attempt is safe. Anything further along means Pi may already be
+      // holding the passenger's money for this fee, and opening a second
+      // sheet would take it twice, so find out what really happened first.
+      const existing = await store().getPayment(ride.cancellationFeePaymentId);
+      if (existing && ['approved', 'completed'].includes(existing.status)) {
+        await recoverStaleFeePayment(existing);
+        const refreshed = await store().getRide(rideId);
+        if (refreshed?.cancellationFeeStatus !== 'outstanding') {
+          res.status(409).json({ error: 'Cancellation fee already paid' });
+          return;
+        }
+      }
+    }
+  }
+  // A cancellation fee is split like the fare it replaces, not like a tip: the
+  // driver is being compensated for work, not handed a gratuity.
+  const feePlatformFee = isFee ? round((ride.cancellationFee! * ride.platformFeePercent) / 100) : 0;
+  const payAmount = isTip ? round(amount!) : isFee ? ride.cancellationFee! : ride.fare;
   const payment: Payment = {
     id: genId('pay'),
     rideId,
     type,
     amount: payAmount,
     platformFeePercent: isTip ? 0 : ride.platformFeePercent,
-    platformFee: isTip ? 0 : ride.platformFee,
+    platformFee: isTip ? 0 : isFee ? feePlatformFee : ride.platformFee,
     // Tips go to the driver in full — no platform fee.
-    driverEarnings: isTip ? payAmount : ride.driverEarnings,
+    driverEarnings: isTip ? payAmount : isFee ? round(payAmount - feePlatformFee) : ride.driverEarnings,
     status: 'created',
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
   await store().savePayment(payment);
   // Link the fare payment to the ride up front so cancellation can release it.
-  if (!isTip) await store().updateRide(rideId, { paymentId: payment.id });
+  if (isFare) await store().updateRide(rideId, { paymentId: payment.id });
+  if (isFee) await store().updateRide(rideId, { cancellationFeePaymentId: payment.id });
   res.status(201).json({
     paymentId: payment.id,
     amount: payment.amount,
-    memo: isTip ? `Taxi Pro tip, ride ${rideId}` : `Taxi Pro ride ${rideId}`,
+    memo: isTip
+      ? `Taxi Pro tip, ride ${rideId}`
+      : isFee
+        ? `Taxi Pro cancellation fee, ride ${rideId}`
+        : `Taxi Pro ride ${rideId}`,
     metadata: { paymentId: payment.id, rideId, type },
   });
 }
@@ -229,7 +273,11 @@ export async function approvePayment(req: Request, res: Response): Promise<void>
     piPaymentId,
     status: result.ok ? 'approved' : 'failed',
   });
-  if (result.ok && payment.type !== 'tip') {
+  // Only the fare is escrowed. Records written before 'type' existed are fares.
+  // A fee payment approved here must not touch paymentStatus — the ride is
+  // cancelled and its fare was already refunded; flipping it back to 'held'
+  // would show the passenger money on hold for a trip that never happened.
+  if (result.ok && (payment.type ?? 'ride') === 'ride') {
     await store().updateRide(payment.rideId, { paymentStatus: 'held' });
   }
   logger.info('[Payment] approve', { paymentId: payment.id, type: payment.type, ok: result.ok });
@@ -278,6 +326,8 @@ export async function completePayment(req: Request, res: Response): Promise<void
         });
         void payoutDriver(updated, 'tip', payment.amount);
       }
+    } else if (payment.type === 'fee') {
+      await finalizeFeePayment(payment, txid);
     } else {
       const updated = await store().updateRide(payment.rideId, {
         paymentId: payment.id,
@@ -299,16 +349,38 @@ export async function completePayment(req: Request, res: Response): Promise<void
   res.status(result.ok ? 200 : 502).json({ success: result.ok, txid, status: result.status });
 }
 
-// Send the driver their real share of a fare or tip out of the app's Pi
-// wallet (App-to-User). Runs after the response to the passenger has already
-// been sent — the passenger's payment is complete regardless of payout
-// outcome, so this never blocks or fails their request. Without
+// Every kind of payout keeps its own set of fields on the ride, so a fare, a
+// tip and a cancellation fee for the same trip each get their own txid and
+// their own duplicate protection. Kept as one table rather than a chain of
+// ternaries — those quietly filed a third kind under the tip's fields, which
+// would have let a paid-out fee mask an unpaid tip.
+const PAYOUT_FIELDS = {
+  fare: {
+    status: 'driverPayoutStatus', txid: 'driverPayoutTxid',
+    error: 'driverPayoutError', piId: 'driverPayoutPiId',
+  },
+  tip: {
+    status: 'tipPayoutStatus', txid: 'tipPayoutTxid',
+    error: 'tipPayoutError', piId: 'tipPayoutPiId',
+  },
+  fee: {
+    status: 'feePayoutStatus', txid: 'feePayoutTxid',
+    error: 'feePayoutError', piId: 'feePayoutPiId',
+  },
+} as const;
+
+export type PayoutKind = keyof typeof PAYOUT_FIELDS;
+
+// Send the driver their real share of a fare, tip or cancellation fee out of
+// the app's Pi wallet (App-to-User). Runs after the response to the passenger
+// has already been sent — the passenger's payment is complete regardless of
+// payout outcome, so this never blocks or fails their request. Without
 // PI_WALLET_SEED configured, this silently no-ops (logged once at startup);
 // funds simply stay queued as 'pending' until an operator backfills them.
-export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: number): Promise<void> {
+export async function payoutDriver(ride: Ride, kind: PayoutKind, amount: number): Promise<void> {
   if (!ride.driverId || amount <= 0) return;
-  const statusField = kind === 'fare' ? 'driverPayoutStatus' : 'tipPayoutStatus';
-  const txidField = kind === 'fare' ? 'driverPayoutTxid' : 'tipPayoutTxid';
+  const statusField = PAYOUT_FIELDS[kind].status;
+  const txidField = PAYOUT_FIELDS[kind].txid;
   // Checked before anything else, including the wallet-config branch below:
   // a recorded txid means funds for this (ride, kind) already settled on chain.
   // Nothing may overwrite that record — doing so would misfile a settled payout
@@ -367,8 +439,8 @@ export async function payoutDriver(ride: Ride, kind: 'fare' | 'tip', amount: num
     } catch (err) {
       const txidFromPartialFailure = (err as { txid?: string }).txid;
       const piPaymentIdFromFailure = (err as { piPaymentId?: string }).piPaymentId;
-      const errorField = kind === 'fare' ? 'driverPayoutError' : 'tipPayoutError';
-      const piIdField = kind === 'fare' ? 'driverPayoutPiId' : 'tipPayoutPiId';
+      const errorField = PAYOUT_FIELDS[kind].error;
+      const piIdField = PAYOUT_FIELDS[kind].piId;
       // A txid on the error means the Stellar transfer already settled and only
       // Pi's bookkeeping call failed — the driver HAS the money. Recording that
       // as 'failed' would put the ride in the operator's unpaid queue, where a
@@ -438,6 +510,59 @@ export async function recoverStalePayment(payment: Payment): Promise<void> {
   }
   await releaseHeldPayment(payment.id);
   await store().updateRide(payment.rideId, { paymentStatus: 'pending' });
+}
+
+// Settle a cancellation-fee payment on our side: the debt is cleared, so the
+// passenger can book again, and the driver is paid their share of it the same
+// way they are paid a fare. Shared by the normal completion path and by the
+// recovery below, so a fee Pi captured always lands the same way whichever
+// route we learn about it from.
+async function finalizeFeePayment(payment: Payment, txid: string): Promise<void> {
+  const updated = await store().updateRide(payment.rideId, {
+    cancellationFeeStatus: 'paid',
+    cancellationFeePaymentId: payment.id,
+    cancellationFeeTxid: txid,
+  });
+  if (updated?.driverId) {
+    sendToUser(updated.driverId, {
+      type: 'ride_status_update',
+      rideId: updated.id,
+      status: 'cancellation_fee_received',
+      data: { amount: payment.driverEarnings },
+    });
+    void payoutDriver(updated, 'fee', payment.driverEarnings);
+  }
+}
+
+// A cancellation-fee payment the passenger approved but whose completion never
+// reached us. Same hazard as a stale fare, different resolution: a fee has no
+// paymentStatus to reset — the debt is either settled or still owed — and the
+// ride is already cancelled, so nothing here may touch the fare's fields.
+// Ask Pi what actually happened: if it captured the fee, finish the job the
+// interrupted call started; if not, drop the hold so the next attempt is free
+// to open a sheet. Either way the passenger stops being stuck behind a debt
+// they already tried to pay.
+export async function recoverStaleFeePayment(payment: Payment): Promise<void> {
+  if (payment.piPaymentId) {
+    try {
+      const { data } = await getPiPayment<{ transaction?: { txid?: string } | null }>(
+        payment.piPaymentId
+      );
+      const txid = data.transaction?.txid;
+      if (txid) {
+        await store().updatePayment(payment.id, { txid, status: 'completed' });
+        await finalizeFeePayment(payment, txid);
+        logger.info('[Payment] fee recovered as completed', { paymentId: payment.id });
+        return;
+      }
+    } catch (err) {
+      logger.warn('[Payment] fee recovery status check failed', {
+        paymentId: payment.id,
+        error: (err as Error).message,
+      });
+    }
+  }
+  await releaseHeldPayment(payment.id);
 }
 
 // Release a held fare payment back to the passenger (ride cancelled). Failures

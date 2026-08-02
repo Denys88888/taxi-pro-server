@@ -15,6 +15,7 @@ import {
 import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
 import { initialOffered } from '../services/scheduler';
 import { hasLiveRide } from '../services/activeRide';
+import { findOutstandingFee } from '../services/cancellationFee';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty, Role } from '../types';
 
 // POST /api/rides — create a ride request (server computes distance + fare).
@@ -37,6 +38,22 @@ export async function createRide(req: Request, res: Response): Promise<void> {
   // morning could not order a taxi today at all.
   if (await hasLiveRide(req.user!.uid)) {
     res.status(409).json({ error: 'You already have an active ride', code: 'ACTIVE_RIDE_EXISTS' });
+    return;
+  }
+
+  // An unpaid late-cancellation fee blocks the next booking. Pi has no card on
+  // file to charge, so a passenger who walks away from the payment sheet cannot
+  // be billed by any other means — refusing the next ride until they settle is
+  // the whole reason the fee is more than a number in a dialog. The amount goes
+  // back with the refusal so the app can offer to pay it on the spot.
+  const owed = await findOutstandingFee(req.user!.uid);
+  if (owed) {
+    res.status(409).json({
+      error: 'An unpaid cancellation fee is outstanding',
+      code: 'CANCELLATION_FEE_DUE',
+      rideId: owed.id,
+      amount: owed.cancellationFee,
+    });
     return;
   }
 
@@ -475,6 +492,11 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
     cancelledBy: cancellerRole,
     cancellationReason: String(req.body.reason),
     cancellationFee,
+    // The fee is owed, not taken. The escrowed fare is one Pi payment for the
+    // full amount and Pi cannot capture part of one, so the hold goes back
+    // whole (above) and the fee is collected as its own payment the passenger
+    // approves afterwards. Until then it is a debt that blocks new bookings.
+    ...(cancellationFee > 0 ? { cancellationFeeStatus: 'outstanding' as const } : {}),
     ...(paymentStatus ? { paymentStatus } : {}),
   });
   const payload = {
@@ -486,6 +508,19 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
   sendToUser(ride.passengerId, payload);
   if (ride.driverId) sendToUser(ride.driverId, payload);
   res.json(updated);
+}
+
+// GET /api/rides/outstanding-fee — the late-cancellation fee this passenger
+// still owes, if any. The create-ride refusal already carries the amount, but
+// the app needs to know before the passenger fills in a whole trip only to be
+// turned away at the last step.
+export async function getOutstandingFee(req: Request, res: Response): Promise<void> {
+  const owed = await findOutstandingFee(req.user!.uid);
+  res.json(
+    owed
+      ? { rideId: owed.id, amount: owed.cancellationFee, cancelledAt: owed.updatedAt }
+      : null
+  );
 }
 
 // POST /api/rides/:id/share — issue a short-lived read-only share token.
