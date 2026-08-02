@@ -4,6 +4,7 @@ import path from 'path';
 import { SqliteStore } from '../src/models/sqlite';
 import { MemoryStore } from '../src/models/memory';
 import type { DataStore } from '../src/models/store';
+import { collectedFeePlatformCut } from '../src/utils/helpers';
 import type { Ride, RideStatus } from '../src/types';
 
 // The dashboard counters and the heatmap moved from "read every ride, then
@@ -14,7 +15,13 @@ import type { Ride, RideStatus } from '../src/types';
 
 const tmp = path.join(os.tmpdir(), `taxipro-stats-${Date.now()}.db`);
 
-function mkRide(id: string, status: RideStatus, createdAt: string, platformFee = 0.4): Ride {
+function mkRide(
+  id: string,
+  status: RideStatus,
+  createdAt: string,
+  platformFee = 0.4,
+  overrides: Partial<Ride> = {}
+): Ride {
   return {
     id,
     passengerId: `p_${id}`,
@@ -30,6 +37,7 @@ function mkRide(id: string, status: RideStatus, createdAt: string, platformFee =
     status,
     createdAt,
     updatedAt: createdAt,
+    ...overrides,
   };
 }
 
@@ -46,6 +54,19 @@ const fixtures: Ride[] = [
   mkRide('r_done_recent', 'completed', iso(2 * DAY), 0.5),
   mkRide('r_done_older', 'completed', iso(20 * DAY), 0.25),
   mkRide('r_done_ancient', 'completed', iso(400 * DAY), 1.25),
+  // Cancelled late: the fee was collected, 3.6 of it went to the driver and the
+  // platform kept 0.4. Aged past every window the tests below assert on.
+  mkRide('r_fee_paid', 'cancelled', iso(20 * DAY), 0.4, {
+    cancellationFee: 4,
+    cancellationFeeDriverEarnings: 3.6,
+    cancellationFeeStatus: 'paid',
+  }),
+  // Raised but never paid: no money moved, so it is worth nothing to anyone.
+  mkRide('r_fee_outstanding', 'cancelled', iso(21 * DAY), 0.4, {
+    cancellationFee: 4,
+    cancellationFeeDriverEarnings: 3.6,
+    cancellationFeeStatus: 'outstanding',
+  }),
 ];
 
 afterAll(() => {
@@ -76,7 +97,9 @@ describe.each<[string, () => DataStore]>([
   it('rideStats matches counting and summing every ride by hand', async () => {
     const all = await store.listAllRides();
     const completed = all.filter((r) => r.status === 'completed');
-    const expectedFee = completed.reduce((s, r) => s + (r.platformFee || 0), 0);
+    const expectedFee =
+      completed.reduce((s, r) => s + (r.platformFee || 0), 0) +
+      all.reduce((s, r) => s + collectedFeePlatformCut(r), 0);
 
     const stats = await store.rideStats();
     expect(stats.total).toBe(all.length);
@@ -84,10 +107,13 @@ describe.each<[string, () => DataStore]>([
     expect(stats.platformEarnings).toBeCloseTo(expectedFee, 6);
   });
 
-  it('rideStats sums only completed rides, not every ride', async () => {
+  it('rideStats takes the fare fee from completed rides only', async () => {
     const stats = await store.rideStats();
-    // 0.5 + 0.25 + 1.25; the searching/cancelled fees must not leak in.
-    expect(stats.platformEarnings).toBeCloseTo(2.0, 6);
+    // 0.5 + 0.25 + 1.25 in fares; the searching/cancelled rides' own platformFee
+    // belongs to a fare nobody paid and must not leak in. The 0.4 on top is the
+    // platform's share of the one cancellation fee that was actually collected.
+    expect(stats.platformEarnings).toBeCloseTo(2.4, 6);
+    // A cancelled ride is not a completed one, whatever it earned.
     expect(stats.completed).toBe(3);
     expect(stats.total).toBe(fixtures.length);
   });

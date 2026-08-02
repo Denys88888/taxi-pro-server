@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import type { DriverInfo, DriverApplicationStatus } from '../types';
+import type { DriverInfo, DriverApplicationStatus, Ride } from '../types';
 
 // Where a driver's application actually stands. applicationStatus is the field
 // of record, but drivers approved before it existed carry only licenseVerified
@@ -41,6 +41,25 @@ export function routeDistanceKm(points: { lat: number; lng: number }[]): number 
     total += haversineKm(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng);
   }
   return total;
+}
+
+// The platform's share of a collected late-cancellation fee. The ride's own
+// platformFee belongs to the fare, and that fare was refunded — the only
+// revenue such a ride produces is the part of the fee the driver did not get.
+// An outstanding fee is worth nothing until it is actually paid.
+export function collectedFeePlatformCut(ride: Ride): number {
+  if (ride.cancellationFeeStatus !== 'paid') return 0;
+  return Math.max(0, (ride.cancellationFee || 0) - (ride.cancellationFeeDriverEarnings || 0));
+}
+
+// What a driver earned from a ride, whether it ran or not: a ride cancelled
+// late on them pays their share of the fee and nothing else, since the fare and
+// any tip belong to a trip that never happened.
+export function driverEarnedFrom(ride: Ride): number {
+  if (ride.status === 'cancelled') {
+    return ride.cancellationFeeStatus === 'paid' ? ride.cancellationFeeDriverEarnings || 0 : 0;
+  }
+  return (ride.driverEarnings || 0) + (ride.tipAmount || 0);
 }
 
 // Round to a fixed number of decimals (default 2), returning a number.

@@ -223,7 +223,20 @@ export class SqliteStore implements DataStore {
            FROM rides WHERE status = 'completed'`
       )
       .get() as { n: number; fee: number };
-    return { total, completed: agg.n, platformEarnings: round(agg.fee) };
+    // Collected late-cancellation fees are revenue too: the fare they belonged
+    // to was refunded, so what the platform keeps is the fee minus the driver's
+    // share. Summed separately because these rides are never 'completed' and so
+    // must not raise the completed count.
+    const fees = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(MAX(0,
+                  COALESCE(CAST(json_extract(data, '$.cancellationFee') AS REAL), 0)
+                - COALESCE(CAST(json_extract(data, '$.cancellationFeeDriverEarnings') AS REAL), 0)
+                )), 0) AS cut
+           FROM rides WHERE json_extract(data, '$.cancellationFeeStatus') = 'paid'`
+      )
+      .get() as { cut: number };
+    return { total, completed: agg.n, platformEarnings: round(agg.fee + fees.cut) };
   }
 
   // ── Messages ───────────────────────────────────────────────────────────────

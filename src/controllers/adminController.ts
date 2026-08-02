@@ -1,6 +1,11 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
-import { round, driverApprovalStatus } from '../utils/helpers';
+import {
+  round,
+  driverApprovalStatus,
+  collectedFeePlatformCut,
+  driverEarnedFrom,
+} from '../utils/helpers';
 import { sendToUser, closeUserSocket } from '../websocket/broadcast';
 import { payoutDriver, PAYOUT_FIELDS, type PayoutKind } from './paymentController';
 import { cancelPayment as piCancelPayment } from '../services/piService';
@@ -315,22 +320,33 @@ export async function getAnalytics(_req: Request, res: Response): Promise<void> 
   }
   const byDate = new Map(revenueByDay.map((d) => [d.date, d]));
   for (const r of rides) {
-    if (r.status !== 'completed') continue;
     const day = byDate.get(r.createdAt.slice(0, 10));
-    if (day) {
+    if (!day) continue;
+    // A cancelled ride with a collected fee earned the platform money without
+    // being a trip: count its revenue, but not as a ride that ran.
+    if (r.status === 'completed') {
       day.revenue = round(day.revenue + (r.platformFee || 0));
       day.rides += 1;
+    } else if (r.status === 'cancelled') {
+      day.revenue = round(day.revenue + collectedFeePlatformCut(r));
     }
   }
 
   const driverAgg = new Map<string, { rides: number; earnings: number }>();
   const routeAgg = new Map<string, number>();
   for (const r of rides) {
+    // A driver paid their share of a cancellation fee earned that money and it
+    // belongs on the leaderboard, but the trip never ran, so it is not a ride.
+    if (r.status === 'cancelled' && r.driverId && driverEarnedFrom(r) > 0) {
+      const agg = driverAgg.get(r.driverId) ?? { rides: 0, earnings: 0 };
+      agg.earnings = round(agg.earnings + driverEarnedFrom(r));
+      driverAgg.set(r.driverId, agg);
+    }
     if (r.status !== 'completed') continue;
     if (r.driverId) {
       const agg = driverAgg.get(r.driverId) ?? { rides: 0, earnings: 0 };
       agg.rides += 1;
-      agg.earnings = round(agg.earnings + (r.driverEarnings || 0) + (r.tipAmount || 0));
+      agg.earnings = round(agg.earnings + driverEarnedFrom(r));
       driverAgg.set(r.driverId, agg);
     }
     const short = (a?: string) => (a ?? '?').split(',')[0].trim();

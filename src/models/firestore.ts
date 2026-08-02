@@ -15,7 +15,7 @@ import type {
   RideStatus,
 } from '../types';
 import { DEFAULT_SETTINGS } from '../config/constants';
-import { nowIso, round } from '../utils/helpers';
+import { nowIso, round, collectedFeePlatformCut } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import type { DataStore, PaginatedRides } from './store';
 
@@ -121,10 +121,14 @@ export class FirestoreStore implements DataStore {
   async rideStats(): Promise<{ total: number; completed: number; platformEarnings: number }> {
     const rides = this.db().collection('rides');
     const completedQ = rides.where('status', '==', 'completed');
+    // Collected late-cancellation fees are revenue as well. Their fare was
+    // refunded, so the platform keeps the fee minus the driver's share; these
+    // rides are 'cancelled', so they must not raise the completed count.
+    const paidFeeQ = rides.where('cancellationFeeStatus', '==', 'paid');
     try {
       // Server-side aggregates: billed as a handful of reads regardless of how
       // many rides exist, instead of one read per document.
-      const [totalSnap, completedSnap] = await Promise.all([
+      const [totalSnap, completedSnap, feeSnap] = await Promise.all([
         rides.count().get(),
         completedQ
           .aggregate({
@@ -132,18 +136,28 @@ export class FirestoreStore implements DataStore {
             fee: AggregateField.sum('platformFee'),
           })
           .get(),
+        paidFeeQ
+          .aggregate({
+            charged: AggregateField.sum('cancellationFee'),
+            toDriver: AggregateField.sum('cancellationFeeDriverEarnings'),
+          })
+          .get(),
       ]);
       const fee = completedSnap.data().fee;
+      // Difference of the two sums rather than a sum of per-ride differences:
+      // a driver's share is never more than the fee it comes out of, so the two
+      // agree, and Firestore cannot aggregate an expression.
+      const feeCut = feeSnap.data().charged - feeSnap.data().toDriver;
       // A sum that comes back non-numeric would quietly render platform
       // earnings as 0 on the dashboard — treat that as a failed aggregate and
       // fall through to the exact computation rather than reporting nothing.
-      if (typeof fee !== 'number' || Number.isNaN(fee)) {
+      if (![fee, feeCut].every((v) => typeof v === 'number' && !Number.isNaN(v))) {
         throw new Error('sum aggregate returned a non-numeric value');
       }
       return {
         total: totalSnap.data().count,
         completed: completedSnap.data().n,
-        platformEarnings: round(fee),
+        platformEarnings: round(fee + Math.max(0, feeCut)),
       };
     } catch (err) {
       // Slower and read-heavy, but correct. Wrong money figures on the
@@ -151,16 +165,21 @@ export class FirestoreStore implements DataStore {
       logger.warn('[Firestore] rideStats aggregate failed, falling back to a full read', {
         error: (err as Error).message,
       });
-      const [totalSnap, completedSnap] = await Promise.all([
+      const [totalSnap, completedSnap, feeSnap] = await Promise.all([
         rides.count().get().catch(() => null),
         completedQ.get(),
+        paidFeeQ.get(),
       ]);
       const completed = completedSnap.docs.map((d) => d.data() as Ride);
       const sum = completed.reduce((s, r) => s + (r.platformFee || 0), 0);
+      const feeCut = feeSnap.docs.reduce(
+        (s, d) => s + collectedFeePlatformCut(d.data() as Ride),
+        0
+      );
       return {
         total: totalSnap ? totalSnap.data().count : completed.length,
         completed: completed.length,
-        platformEarnings: round(sum),
+        platformEarnings: round(sum + feeCut),
       };
     }
   }

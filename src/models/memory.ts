@@ -10,7 +10,7 @@ import type {
   RideStatus,
 } from '../types';
 import { DEFAULT_SETTINGS } from '../config/constants';
-import { nowIso, round } from '../utils/helpers';
+import { nowIso, round, collectedFeePlatformCut } from '../utils/helpers';
 import type { DataStore, PaginatedRides } from './store';
 
 // In-memory fallback used when Firebase is not configured or unavailable.
@@ -91,7 +91,12 @@ export class MemoryStore implements DataStore {
     let completed = 0;
     let platformEarnings = 0;
     for (const r of this.rides.values()) {
-      if (r.status !== 'completed') continue;
+      // A collected cancellation fee is revenue from a ride that never ran, so
+      // it counts towards earnings but not towards the completed-ride count.
+      if (r.status !== 'completed') {
+        platformEarnings += collectedFeePlatformCut(r);
+        continue;
+      }
       completed += 1;
       platformEarnings += r.platformFee || 0;
     }
