@@ -15,7 +15,7 @@ import {
 import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
 import { initialOffered } from '../services/scheduler';
 import { hasLiveRide } from '../services/activeRide';
-import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty } from '../types';
+import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty, Role } from '../types';
 
 // POST /api/rides — create a ride request (server computes distance + fare).
 // Supports multi-stop, scheduled (future dispatch) and negotiable (inDriver) rides.
@@ -432,15 +432,33 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
     res.status(409).json({ error: `Ride already ${ride.status}` });
     return;
   }
+  // Which side of *this* ride is cancelling. Taken from the ride, not from the
+  // role on the token: the app lets a user switch between passenger and driver
+  // mode, so someone who accepted a ride as a driver and later flipped back to
+  // passenger mode still owns the driver's side of it. Reading req.user.role
+  // filed those cancellations under the wrong party.
+  const cancellerRole: Role = ride.driverId === uid ? 'driver' : 'passenger';
   // Free before arrival, and for a grace window after arrival (the rider may be
   // on their way out, or the driver may be at the wrong spot). A fee applies
   // once the trip is in progress, or once the grace window has elapsed.
+  //
+  // Only to the passenger, though. The fee is compensation for wasting the
+  // driver's time; when it is the driver who walks away from a trip already
+  // under way, the passenger is the one left standing on the pavement, and
+  // billing them half the fare for it is exactly backwards.
+  //
+  // A ride that reached 'arrived' without an arrivedAt is a hole in our own
+  // records — the handler stamps the two together, so the timestamp only goes
+  // missing if something went wrong on our side. Treating its absence as "the
+  // window closed long ago" charged the passenger half the fare for a moment
+  // nobody can point to; the benefit of the doubt goes to them.
   const graceMs = FREE_CANCELLATION_AFTER_ARRIVAL_MIN * 60 * 1000;
   const withinGrace =
     ride.status === 'arrived' &&
-    !!ride.arrivedAt &&
-    Date.now() - new Date(ride.arrivedAt).getTime() < graceMs;
-  const feeApplies = ride.status === 'in_progress' || (ride.status === 'arrived' && !withinGrace);
+    (!ride.arrivedAt || Date.now() - new Date(ride.arrivedAt).getTime() < graceMs);
+  const feeApplies =
+    cancellerRole === 'passenger' &&
+    (ride.status === 'in_progress' || (ride.status === 'arrived' && !withinGrace));
   const cancellationFee = feeApplies
     ? round((ride.fare * LATE_CANCELLATION_FEE_PERCENT) / 100)
     : 0;
@@ -454,7 +472,7 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
   }
   const updated = await store().updateRide(req.params.id, {
     status: 'cancelled',
-    cancelledBy: req.user!.role,
+    cancelledBy: cancellerRole,
     cancellationReason: String(req.body.reason),
     cancellationFee,
     ...(paymentStatus ? { paymentStatus } : {}),
