@@ -116,6 +116,12 @@ paths:
                   sandbox: { type: boolean }
                   firebase: { type: boolean }
                   store: { type: string }
+                  commit:
+                    type: string
+                    description: >-
+                      Short sha of the deployed revision. Absent where the
+                      hosting platform does not provide one.
+                    example: 7cf52cd
                   time: { type: string, format: date-time }
 
   /api/settings:

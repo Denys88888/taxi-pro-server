@@ -143,12 +143,21 @@ export function createApp(): Express {
   });
 
   // Health check (no auth) — surfaces sandbox + storage mode to the frontend.
+  //
+  // Render sets RENDER_GIT_COMMIT on every deploy, so the short sha is the one
+  // way to tell from outside whether a push actually reached the running
+  // service: without it a deploy that failed to build is indistinguishable from
+  // one that succeeded, since the old instance keeps answering 200. Read per
+  // request rather than at boot so it stays absent (not stale) anywhere the
+  // variable is unset, and truncated because only the identity matters.
   app.get('/api/health', (_req, res) => {
+    const commit = process.env.RENDER_GIT_COMMIT?.slice(0, 7);
     res.json({
       status: 'ok',
       sandbox: env.PI_SANDBOX,
       firebase: isFirebaseEnabled(),
       store: storeKind(),
+      ...(commit ? { commit } : {}),
       time: new Date().toISOString(),
     });
   });
