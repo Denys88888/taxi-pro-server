@@ -354,7 +354,9 @@ export async function completePayment(req: Request, res: Response): Promise<void
 // their own duplicate protection. Kept as one table rather than a chain of
 // ternaries — those quietly filed a third kind under the tip's fields, which
 // would have let a paid-out fee mask an unpaid tip.
-const PAYOUT_FIELDS = {
+// Exported so the admin retry path reads and clears exactly the fields the
+// payout wrote, instead of keeping its own copy of the mapping to drift from.
+export const PAYOUT_FIELDS = {
   fare: {
     status: 'driverPayoutStatus', txid: 'driverPayoutTxid',
     error: 'driverPayoutError', piId: 'driverPayoutPiId',
@@ -522,6 +524,7 @@ async function finalizeFeePayment(payment: Payment, txid: string): Promise<void>
     cancellationFeeStatus: 'paid',
     cancellationFeePaymentId: payment.id,
     cancellationFeeTxid: txid,
+    cancellationFeeDriverEarnings: payment.driverEarnings,
   });
   if (updated?.driverId) {
     sendToUser(updated.driverId, {

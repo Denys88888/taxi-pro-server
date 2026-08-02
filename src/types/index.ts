@@ -179,6 +179,12 @@ export interface Ride {
   cancellationFeeStatus?: 'outstanding' | 'paid';
   cancellationFeePaymentId?: string;
   cancellationFeeTxid?: string;
+  // The driver's share of the fee, written down when it is settled rather than
+  // recomputed by each screen that shows it. Three places need the figure — the
+  // A2U payout, the admin retry list and the driver's earnings — and rounding
+  // it separately in each would let them disagree with what was actually
+  // charged by a hundredth of a pi.
+  cancellationFeeDriverEarnings?: number;
   shareToken?: string;
   createdAt: string;
   updatedAt: string;

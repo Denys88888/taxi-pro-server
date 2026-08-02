@@ -134,3 +134,102 @@ describe('payout double-send protection', () => {
     expect(row!.retryable).toBe(true);
   });
 });
+
+// A cancellation fee is the only payout that lives on a ride which never
+// completed. Everything that finds unpaid money used to filter on
+// status === 'completed' first, so a driver could be owed a fee with nothing
+// anywhere able to show it or send it.
+describe('cancellation-fee payouts are visible and retryable', () => {
+  // A cancelled ride whose fee the passenger paid, but whose A2U transfer to
+  // the driver never went out.
+  async function seedUnpaidFee(overrides: Partial<Ride> = {}): Promise<Ride> {
+    const ride: Ride = {
+      id: genId('ride'),
+      passengerId: 'pax_payout_test',
+      driverId: 'drv_payout_test',
+      pickup: { lat: 52.23, lng: 21.01 },
+      destination: { lat: 52.2, lng: 21.05 },
+      vehicleType: 'economy',
+      distanceKm: 5,
+      estimatedDurationMin: 10,
+      fare: 10,
+      platformFeePercent: 10,
+      platformFee: 1,
+      driverEarnings: 9,
+      status: 'cancelled',
+      paymentStatus: 'cancelled',
+      cancellationFee: 5,
+      cancellationFeeStatus: 'paid',
+      cancellationFeeDriverEarnings: 4.5,
+      cancellationFeeTxid: 'tx_fee_paid_by_passenger',
+      feePayoutStatus: 'failed',
+      feePayoutError: 'wallet unreachable',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      ...overrides,
+    } as Ride;
+    await store().saveRide(ride);
+    return ride;
+  }
+
+  it('lists the fee a driver is still owed on a cancelled ride', async () => {
+    const ride = await seedUnpaidFee();
+
+    const res = await request(app).get('/api/admin/unpaid-payouts').set(adminAuth());
+    const row = (res.body as Array<Record<string, unknown>>).find(
+      (r) => r.id === ride.id && r.kind === 'fee'
+    );
+    expect(row).toBeDefined();
+    // The driver's share of the fee, not the fee and not the refunded fare.
+    expect(row!.amount).toBe(4.5);
+    expect(row!.retryable).toBe(true);
+  });
+
+  it('does not list a fee that was never paid by the passenger', async () => {
+    const ride = await seedUnpaidFee({
+      cancellationFeeStatus: 'outstanding',
+      cancellationFeeTxid: undefined,
+      feePayoutStatus: undefined,
+    });
+
+    const res = await request(app).get('/api/admin/unpaid-payouts').set(adminAuth());
+    const row = (res.body as Array<Record<string, unknown>>).find(
+      (r) => r.id === ride.id && r.kind === 'fee'
+    );
+    // Nothing has been collected, so there is nothing to hand on.
+    expect(row).toBeUndefined();
+  });
+
+  it('lets the operator retry it even though the ride never completed', async () => {
+    const ride = await seedUnpaidFee();
+
+    const res = await request(app)
+      .post(`/api/admin/rides/${ride.id}/retry-payout`)
+      .set(adminAuth())
+      .send({ kind: 'fee' });
+
+    // Reaches the payout instead of being turned away by the fare gate. No
+    // PI_WALLET_SEED in tests, so it stops at the wallet rather than at a
+    // 409 about a fare this ride never had.
+    expect(res.status).toBe(200);
+    expect(res.body.driverPayoutStatus).toBe('no_wallet_configured');
+    const after = await store().getRide(ride.id);
+    expect(after?.driverPayoutStatus).toBeUndefined();
+    expect(after?.tipPayoutStatus).toBeUndefined();
+  });
+
+  it('refuses to re-send a fee whose transfer already settled', async () => {
+    const ride = await seedUnpaidFee({
+      feePayoutStatus: 'sent_unconfirmed',
+      feePayoutTxid: 'stellar_fee_already_settled',
+    });
+
+    const res = await request(app)
+      .post(`/api/admin/rides/${ride.id}/retry-payout`)
+      .set(adminAuth())
+      .send({ kind: 'fee' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.txid).toBe('stellar_fee_already_settled');
+  });
+});

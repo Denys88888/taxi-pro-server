@@ -2,9 +2,9 @@ import type { Request, Response } from 'express';
 import { store } from '../models';
 import { round, driverApprovalStatus } from '../utils/helpers';
 import { sendToUser, closeUserSocket } from '../websocket/broadcast';
-import { payoutDriver } from './paymentController';
+import { payoutDriver, PAYOUT_FIELDS, type PayoutKind } from './paymentController';
 import { cancelPayment as piCancelPayment } from '../services/piService';
-import type { Settings, Role, RideStatus } from '../types';
+import type { Settings, Role, RideStatus, Ride } from '../types';
 
 const ROLES: Role[] = ['passenger', 'driver', 'admin'];
 const RIDE_STATUSES: RideStatus[] = [
@@ -27,51 +27,74 @@ export async function retryRidePayout(req: Request, res: Response): Promise<void
     res.status(404).json({ error: 'Ride not found' });
     return;
   }
-  if (!ride.driverId || ride.paymentStatus !== 'completed') {
+  if (!ride.driverId) {
+    res.status(409).json({ error: 'Ride has no driver to pay out' });
+    return;
+  }
+  const requested = (req.body as { kind?: string }).kind;
+  const kind: PayoutKind = requested === 'tip' ? 'tip' : requested === 'fee' ? 'fee' : 'fare';
+  const fields = PAYOUT_FIELDS[kind];
+
+  // A cancellation fee is earned on a ride that never happened, so there is no
+  // completed fare to gate it on — the fee being settled is its own gate.
+  if (kind === 'fee') {
+    if (ride.cancellationFeeStatus !== 'paid') {
+      res.status(409).json({ error: 'Ride has no paid cancellation fee to pay out' });
+      return;
+    }
+  } else if (ride.paymentStatus !== 'completed') {
     res.status(409).json({ error: 'Ride has no completed fare payment to pay out' });
     return;
   }
-  const kind: 'fare' | 'tip' = (req.body as { kind?: string }).kind === 'tip' ? 'tip' : 'fare';
 
   // Never re-send when a transfer for this (ride, kind) already settled on
   // chain: the driver has the money and only Pi's bookkeeping is out of sync.
   // payoutDriver refuses this too, but returning a real error here tells the
   // operator why nothing happened instead of looking like a silent no-op.
-  const existingTxid = kind === 'fare' ? ride.driverPayoutTxid : ride.tipPayoutTxid;
+  const existingTxid = ride[fields.txid];
   if (existingTxid) {
     res.status(409).json({
       error: 'Funds already transferred for this payout — retrying would pay twice',
       txid: existingTxid,
-      status: kind === 'fare' ? ride.driverPayoutStatus : ride.tipPayoutStatus,
+      status: ride[fields.status],
     });
     return;
   }
 
-  if (kind === 'fare') {
-    if (ride.driverPayoutPiId) await piCancelPayment(ride.driverPayoutPiId).catch(() => undefined);
-    if (['pending', 'failed', 'no_wallet_configured'].includes(ride.driverPayoutStatus ?? '')) {
-      await store().updateRide(ride.id, { driverPayoutStatus: undefined, driverPayoutPiId: undefined });
-    }
-  } else {
-    if (!ride.tipAmount || ride.tipAmount <= 0) {
-      res.status(409).json({ error: 'Ride has no tip to pay out' });
-      return;
-    }
-    if (ride.tipPayoutPiId) await piCancelPayment(ride.tipPayoutPiId).catch(() => undefined);
-    if (['pending', 'failed', 'no_wallet_configured'].includes(ride.tipPayoutStatus ?? '')) {
-      await store().updateRide(ride.id, { tipPayoutStatus: undefined, tipPayoutPiId: undefined });
-    }
+  if (kind === 'tip' && !(ride.tipAmount && ride.tipAmount > 0)) {
+    res.status(409).json({ error: 'Ride has no tip to pay out' });
+    return;
+  }
+  const stalePiId = ride[fields.piId];
+  if (stalePiId) await piCancelPayment(stalePiId).catch(() => undefined);
+  if (['pending', 'failed', 'no_wallet_configured'].includes(ride[fields.status] ?? '')) {
+    await store().updateRide(ride.id, { [fields.status]: undefined, [fields.piId]: undefined });
   }
 
   const fresh = (await store().getRide(req.params.id))!;
-  const amount = kind === 'fare' ? fresh.driverEarnings : (fresh.tipAmount ?? 0);
+  const amount = payoutAmount(fresh, kind);
+  if (amount <= 0) {
+    res.status(409).json({ error: 'Nothing to pay out for this ride' });
+    return;
+  }
   await payoutDriver(fresh, kind, amount);
   const updated = await store().getRide(req.params.id);
-  res.json(
-    kind === 'fare'
-      ? { driverPayoutStatus: updated?.driverPayoutStatus, driverPayoutTxid: updated?.driverPayoutTxid, driverPayoutError: updated?.driverPayoutError }
-      : { driverPayoutStatus: updated?.tipPayoutStatus, driverPayoutTxid: updated?.tipPayoutTxid, driverPayoutError: updated?.tipPayoutError }
-  );
+  // Reported under the fare's key names whatever the kind, because that is what
+  // the admin panel reads — the kind is already in the request it sent.
+  res.json({
+    driverPayoutStatus: updated?.[fields.status],
+    driverPayoutTxid: updated?.[fields.txid],
+    driverPayoutError: updated?.[fields.error],
+  });
+}
+
+// What the driver is owed for one kind of payout on one ride — all three read
+// off the ride, so a retry can never pay a different figure than the original
+// attempt would have.
+function payoutAmount(ride: Ride, kind: PayoutKind): number {
+  if (kind === 'fare') return ride.driverEarnings;
+  if (kind === 'tip') return ride.tipAmount ?? 0;
+  return ride.cancellationFeeDriverEarnings ?? 0;
 }
 
 // GET /api/admin/unpaid-payouts — list completed rides where driverPayoutStatus
@@ -100,7 +123,7 @@ export async function getUnpaidPayouts(req: Request, res: Response): Promise<voi
   };
   type PayoutItem = {
     id: string; driverId: string | undefined; amount: number; fare: number;
-    payoutStatus: string; payoutError?: string; createdAt: string; kind: 'fare' | 'tip';
+    payoutStatus: string; payoutError?: string; createdAt: string; kind: PayoutKind;
     // False when a transfer already settled on chain: the UI must not offer a
     // retry, only reconciliation with Pi.
     retryable: boolean;
@@ -108,7 +131,15 @@ export async function getUnpaidPayouts(req: Request, res: Response): Promise<voi
   };
   const items: PayoutItem[] = [];
   for (const r of rides) {
-    if (r.status !== 'completed' || !r.driverId || r.paymentStatus !== 'completed') continue;
+    if (!r.driverId) continue;
+    // A cancellation fee is money a passenger paid for a ride that was called
+    // off, so it lives on a ride that is 'cancelled' and never has a completed
+    // fare. Checked before the completed-ride filter below, or a driver could
+    // be owed a fee with nothing anywhere showing it.
+    if (r.cancellationFeeStatus === 'paid' && isStuck(r.feePayoutStatus, r.updatedAt)) {
+      items.push({ id: r.id, driverId: r.driverId, amount: r.cancellationFeeDriverEarnings ?? 0, fare: r.fare, payoutStatus: r.feePayoutStatus ?? 'missing', payoutError: r.feePayoutError, createdAt: r.createdAt, kind: 'fee', retryable: !r.feePayoutTxid, txid: r.feePayoutTxid });
+    }
+    if (r.status !== 'completed' || r.paymentStatus !== 'completed') continue;
     if (isStuck(r.driverPayoutStatus, r.updatedAt)) {
       items.push({ id: r.id, driverId: r.driverId, amount: r.driverEarnings, fare: r.fare, payoutStatus: r.driverPayoutStatus ?? 'missing', payoutError: r.driverPayoutError, createdAt: r.createdAt, kind: 'fare', retryable: !r.driverPayoutTxid, txid: r.driverPayoutTxid });
     }
