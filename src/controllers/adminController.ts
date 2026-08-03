@@ -190,15 +190,25 @@ export async function getStats(_req: Request, res: Response): Promise<void> {
 export async function listUsers(req: Request, res: Response): Promise<void> {
   const roleParam = String(req.query.role ?? '');
   const role = ROLES.includes(roleParam as Role) ? (roleParam as Role) : undefined;
-  const users = await store().listUsers(role);
+  const [users, resolvedReports] = await Promise.all([
+    store().listUsers(role),
+    store().listReports('resolved'),
+  ]);
+  // Same count resolveReport() uses for the auto-block threshold — surfaced
+  // here so moderators can see how close a user is before it fires.
+  const strikeCounts = new Map<string, number>();
+  for (const r of resolvedReports) {
+    strikeCounts.set(r.reportedId, (strikeCounts.get(r.reportedId) ?? 0) + 1);
+  }
+  const withStrikes = users.map((u) => ({ ...u, strikeCount: strikeCounts.get(u.uid) ?? 0 }));
   const search = String(req.query.search ?? '').toLowerCase().trim();
   const filtered = search
-    ? users.filter(
+    ? withStrikes.filter(
         (u) =>
           u.name.toLowerCase().includes(search) ||
           u.uid.toLowerCase().includes(search)
       )
-    : users;
+    : withStrikes;
   res.json({ users: filtered });
 }
 
