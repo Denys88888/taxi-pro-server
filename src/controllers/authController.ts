@@ -31,13 +31,17 @@ export async function devAuth(req: Request, res: Response): Promise<void> {
   const isAdmin = adminUids.has(uid);
   const resolvedRole = isAdmin ? 'admin' : role === 'driver' ? 'driver' : 'passenger';
   const existing = await store().getUser(uid);
-  // An existing dev user whose uid was added to ADMIN_UIDS after first login
-  // would otherwise keep its stale stored role forever.
-  if (existing && isAdmin && existing.role !== 'admin') {
-    const promoted = await store().updateUser(uid, { role: 'admin' });
+  // A dev/sandbox account's role always follows the role picker used to log
+  // in, not whichever role it happened to be created with the first time —
+  // otherwise a fixture name (e.g. "TestDriver") that was ever created under
+  // the wrong role gets permanently stuck there, and the AuthScreen's
+  // devDriver/devPassenger buttons silently stop doing what they say. This
+  // also covers ADMIN_UIDS promotion for a uid added after its first login.
+  if (existing && existing.role !== resolvedRole) {
+    const promoted = await store().updateUser(uid, { role: resolvedRole });
     if (promoted) {
-      const t = signToken({ uid, role: 'admin', username: name });
-      logger.info('[Auth] dev-login (promoted to admin via ADMIN_UIDS)', { uid });
+      const t = signToken({ uid, role: resolvedRole, username: name });
+      logger.info('[Auth] dev-login (role switched)', { uid, from: existing.role, to: resolvedRole });
       res.json({ token: t, user: promoted });
       return;
     }
