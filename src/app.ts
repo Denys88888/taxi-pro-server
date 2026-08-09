@@ -165,10 +165,14 @@ export function createApp(): Express {
   // Global rate limit on the API surface.
   app.use('/api', apiLimiter);
 
-  // Public settings (no auth) — the safe branding/contact/maintenance subset
-  // every client needs before login; the full record (fees, fare knobs, etc.)
-  // stays admin-only at /api/admin/settings. Registered AFTER apiLimiter so
-  // the 60s poll from every open client can't exhaust the shared quota.
+  // Public settings (no auth) — branding/contact/maintenance, plus the fare
+  // knobs. Those knobs are the price list the passenger is quoted from, so
+  // withholding them left the client estimating off its own hardcoded table:
+  // an admin raising minFare or the per-km rate changed what we charge at the
+  // end while the quote on screen stayed put. Commission (platformFeePercent)
+  // and the operational thresholds stay admin-only at /api/admin/settings.
+  // Registered AFTER apiLimiter so the 60s poll from every open client can't
+  // exhaust the shared quota.
   app.get('/api/settings', async (_req, res) => {
     const settings = await store().getSettings();
     res.json({
@@ -176,6 +180,9 @@ export function createApp(): Express {
       appLogo: settings.appLogo,
       contactEmail: settings.contactEmail,
       maintenanceMode: settings.maintenanceMode,
+      minFare: settings.minFare,
+      baseFarePerKm: settings.baseFarePerKm,
+      surgeEnabled: settings.surgeEnabled,
     });
   });
 
