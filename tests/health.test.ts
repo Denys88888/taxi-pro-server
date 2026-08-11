@@ -16,6 +16,16 @@ describe('GET /api/health', () => {
     expect(res.body).toHaveProperty('firebase');
   });
 
+  // Without PI_WALLET_SEED, payoutDriver silently no-ops and drivers are never
+  // paid — a failure with no outward symptom. This boolean is the only way to
+  // answer "will drivers get paid?" without shell access to the host, so it
+  // must always be present, and must never be the seed itself.
+  it('reports whether a payout wallet is configured, as a boolean', async () => {
+    const res = await request(app).get('/api/health');
+    expect(res.body).toHaveProperty('wallet');
+    expect(typeof res.body.wallet).toBe('boolean');
+  });
+
   // The only way to tell from outside whether a push reached the running
   // service: a deploy that failed to build leaves the old instance answering
   // 200, so 'ok' alone proves nothing about which code is live.

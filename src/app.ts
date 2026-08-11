@@ -157,6 +157,13 @@ export function createApp(): Express {
       sandbox: env.PI_SANDBOX,
       firebase: isFirebaseEnabled(),
       store: storeKind(),
+      // Whether driver payouts can actually be sent. Without PI_WALLET_SEED
+      // payoutDriver silently no-ops and every payout parks as
+      // 'no_wallet_configured' — drivers complete rides and are never paid,
+      // with nothing visible from outside to say why. A boolean, never the
+      // seed: this is the one fact needed to answer "will drivers get paid?"
+      // without shell access to the host.
+      wallet: !!env.PI_WALLET_SEED,
       ...(commit ? { commit } : {}),
       time: new Date().toISOString(),
     });
