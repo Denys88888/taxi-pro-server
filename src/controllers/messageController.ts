@@ -13,7 +13,12 @@ export async function getHistory(req: Request, res: Response): Promise<void> {
   }
   const rideId = chatId.replace(/^chat_/, '');
   const ride = await store().getRide(rideId);
-  if (ride && ride.passengerId !== req.user!.uid && ride.driverId !== req.user!.uid) {
+  // No ride behind this chatId denies access rather than skipping the check —
+  // rides are never hard-deleted today, so this branch is currently
+  // unreachable for a real chatId, but sendMessage below already guards the
+  // same way and a future retention/cleanup job must not silently reopen this
+  // as an unauthenticated read of an orphaned chat's history.
+  if (!ride || (ride.passengerId !== req.user!.uid && ride.driverId !== req.user!.uid)) {
     res.status(403).json({ error: 'Not a participant' });
     return;
   }
