@@ -344,6 +344,17 @@ export async function acceptOffer(req: Request, res: Response): Promise<void> {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
+  // submitOffer requires 'searching' to bid; accepting must require the same
+  // — otherwise offers, which are never cleared once one is accepted, let a
+  // second accept call silently swap the assigned driver out from under the
+  // first one (no cancellation, no notice to them) any time after the ride
+  // moved on. The client already hides the offers list once assigned, which
+  // stops an accidental double-tap, but that's UI, not a security boundary —
+  // this is the same check reachable directly against the API.
+  if (ride.status !== 'searching') {
+    res.status(409).json({ error: 'Ride is not open for offers' });
+    return;
+  }
   const offer = ride.offers?.find((o) => o.driverId === driverId);
   if (!offer) {
     res.status(404).json({ error: 'Offer not found' });

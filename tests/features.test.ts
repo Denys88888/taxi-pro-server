@@ -116,6 +116,70 @@ describe('fare negotiation (inDriver)', () => {
     expect(accept.body.driverId).toBe('nd-driver');
     expect(accept.body.fare).toBe(6);
   });
+
+  // Offers are never cleared once one is accepted, so without a status guard
+  // a second accept call — direct against the API, not through the UI, which
+  // already hides the offers list once assigned — could silently reassign the
+  // ride to a different driver with no cancellation or notice to the first.
+  it('rejects a second accept once the ride is already assigned', async () => {
+    await seedUser({
+      uid: 'nd-driver2',
+      role: 'driver',
+      name: 'Drew2',
+      driverInfo: {
+        vehicleType: 'economy',
+        brand: 'Toyota',
+        model: 'Prius',
+        color: 'white',
+        number: 'WX 2',
+        vehicleYear: 2019,
+        licenseVerified: true,
+        applicationStatus: 'approved',
+        isOnline: true,
+      },
+    });
+    await seedUser({
+      uid: 'nd-driver3',
+      role: 'driver',
+      name: 'Drew3',
+      driverInfo: {
+        vehicleType: 'economy',
+        brand: 'Toyota',
+        model: 'Prius',
+        color: 'white',
+        number: 'WX 3',
+        vehicleYear: 2019,
+        licenseVerified: true,
+        applicationStatus: 'approved',
+        isOnline: true,
+      },
+    });
+    const created = await request(app)
+      .post('/api/rides')
+      .set(authFor('nd-pass2'))
+      .send({ pickup, destination, vehicleType: 'economy', negotiable: true, offeredFare: 5 });
+    const rideId = created.body.id;
+
+    await request(app).post(`/api/rides/${rideId}/offers`).set(authFor('nd-driver2', 'driver')).send({ amount: 6 });
+    await request(app).post(`/api/rides/${rideId}/offers`).set(authFor('nd-driver3', 'driver')).send({ amount: 7 });
+
+    const firstAccept = await request(app)
+      .post(`/api/rides/${rideId}/offers/accept`)
+      .set(authFor('nd-pass2'))
+      .send({ driverId: 'nd-driver2' });
+    expect(firstAccept.status).toBe(200);
+    expect(firstAccept.body.driverId).toBe('nd-driver2');
+
+    const secondAccept = await request(app)
+      .post(`/api/rides/${rideId}/offers/accept`)
+      .set(authFor('nd-pass2'))
+      .send({ driverId: 'nd-driver3' });
+    expect(secondAccept.status).toBe(409);
+
+    // The first driver must still be the one actually assigned.
+    const fetched = await request(app).get(`/api/rides/${rideId}`).set(authFor('nd-pass2'));
+    expect(fetched.body.driverId).toBe('nd-driver2');
+  });
 });
 
 describe('phone visibility on assigned ride', () => {
