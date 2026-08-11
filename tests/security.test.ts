@@ -170,3 +170,60 @@ describe('payment authorization', () => {
     expect(cancel.status).toBe(403);
   });
 });
+
+// Blocking someone mid-ride strands the other party: every request from the
+// blocked account 403s from then on, so nobody can advance or complete the
+// ride, and the passenger's only exit is a cancellation that past arrival
+// bills them half the fare for a trip the platform ended. updateUserBlock
+// always cleaned this up; the strike auto-block in resolveReport did not.
+describe('blocking cancels the blocked user’s active rides', () => {
+  it('cleans up on a manual admin block', async () => {
+    await seedUser({ uid: 'blk-admin', role: 'admin' });
+    await seedUser({ uid: 'blk-pass', role: 'passenger' });
+    await seedUser({ uid: 'blk-drv', role: 'driver' });
+    await seedRide({ id: 'blk-ride', passengerId: 'blk-pass', driverId: 'blk-drv', status: 'in_progress' });
+
+    const res = await request(app)
+      .patch('/api/admin/users/blk-drv')
+      .set(auth('blk-admin', 'admin'))
+      .send({ isBlocked: true, blockReason: 'test' });
+    expect(res.status).toBe(200);
+
+    const ride = await store().getRide('blk-ride');
+    expect(ride?.status).toBe('cancelled');
+    // Platform-initiated: the stranded passenger must not be billed for it.
+    expect(ride?.cancellationFee).toBe(0);
+  });
+
+  it('cleans up on an auto-block from resolved strikes too', async () => {
+    await seedUser({ uid: 'ab-admin', role: 'admin' });
+    await seedUser({ uid: 'ab-pass', role: 'passenger' });
+    await seedUser({ uid: 'ab-drv', role: 'driver' });
+    await seedRide({ id: 'ab-ride', passengerId: 'ab-pass', driverId: 'ab-drv', status: 'in_progress' });
+
+    const threshold = (await store().getSettings()).autoBlockThreshold;
+    // One short of the threshold already resolved, so resolving the last one
+    // trips the auto-block.
+    for (let i = 0; i < threshold - 1; i++) {
+      await store().addReport({
+        id: `ab-rep-old-${i}`, rideId: 'ab-ride', reporterId: 'ab-pass', reportedId: 'ab-drv',
+        reason: 'complaint', status: 'resolved', createdAt: nowIso(),
+      });
+    }
+    await store().addReport({
+      id: 'ab-rep-last', rideId: 'ab-ride', reporterId: 'ab-pass', reportedId: 'ab-drv',
+      reason: 'complaint', status: 'open', createdAt: nowIso(),
+    });
+
+    const res = await request(app)
+      .patch('/api/admin/reports/ab-rep-last')
+      .set(auth('ab-admin', 'admin'))
+      .send({ status: 'resolved' });
+    expect(res.status).toBe(200);
+
+    expect((await store().getUser('ab-drv'))?.isBlocked).toBe(true);
+    const ride = await store().getRide('ab-ride');
+    expect(ride?.status).toBe('cancelled');
+    expect(ride?.cancellationFee).toBe(0);
+  });
+});

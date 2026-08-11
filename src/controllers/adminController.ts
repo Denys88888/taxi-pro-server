@@ -22,6 +22,34 @@ const RIDE_STATUSES: RideStatus[] = [
   'cancelled',
 ];
 
+// Blocking someone mid-ride strands whoever is on the other side of it: every
+// request from the blocked account 403s from that point on, so the ride can
+// never be advanced or completed, and the passenger's only way out is a
+// cancellation that — past arrival — bills them half the fare for a trip the
+// platform ended. Shared by both block paths; the strike auto-block in
+// resolveReport used to skip this entirely and leave exactly that behind.
+async function cancelActiveRidesFor(uid: string): Promise<void> {
+  const activeStatuses: RideStatus[] = ['searching', 'assigned', 'arrived', 'in_progress'];
+  for (const status of activeStatuses) {
+    const rides = await store().listAllRides(status);
+    for (const ride of rides) {
+      if (ride.passengerId !== uid && ride.driverId !== uid) continue;
+      await store().updateRide(ride.id, {
+        status: 'cancelled',
+        cancelledBy: ride.driverId === uid ? 'driver' : 'passenger',
+        cancellationReason: 'Account blocked',
+        // No fee: the platform ended this, not the counterparty, and they are
+        // the one left without a ride.
+        cancellationFee: 0,
+      });
+      const other = ride.passengerId === uid ? ride.driverId : ride.passengerId;
+      if (other) {
+        sendToUser(other, { type: 'ride_status_update', rideId: ride.id, status: 'cancelled', data: {} });
+      }
+    }
+  }
+}
+
 // POST /api/admin/rides/:id/retry-payout — manually re-run the driver A2U
 // payout for a ride whose driverPayoutStatus is 'failed' (or absent), and
 // return the outcome (including the error message) directly in the response
@@ -237,18 +265,7 @@ export async function updateUserBlock(req: Request, res: Response): Promise<void
     // Deliver the block notice, then sever the live socket so the banned user
     // can't keep acting over their existing connection.
     closeUserSocket(req.params.id, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
-    // Cancel any active rides for the blocked user.
-    const activeStatuses: RideStatus[] = ['assigned', 'arrived', 'in_progress', 'searching'];
-    for (const status of activeStatuses) {
-      const rides = await store().listAllRides(status);
-      for (const ride of rides) {
-        if (ride.passengerId === req.params.id || ride.driverId === req.params.id) {
-          await store().updateRide(ride.id, { status: 'cancelled' });
-          const other = ride.passengerId === req.params.id ? ride.driverId : ride.passengerId;
-          if (other) sendToUser(other, { type: 'ride_status_update', rideId: ride.id, status: 'cancelled', data: {} });
-        }
-      }
-    }
+    await cancelActiveRidesFor(req.params.id);
   }
   res.json(updated);
 }
@@ -416,6 +433,9 @@ export async function resolveReport(req: Request, res: Response): Promise<void> 
           blockReason: `Auto-blocked: ${strikeCount} resolved reports`,
         });
         closeUserSocket(updated.reportedId, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
+        // Same cleanup the manual block does — an auto-block is no less final
+        // for whoever is mid-ride with them.
+        await cancelActiveRidesFor(updated.reportedId);
       }
     }
   }
