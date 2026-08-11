@@ -22,6 +22,17 @@ export async function registerDriver(req: Request, res: Response): Promise<void>
     res.status(404).json({ error: 'User not found' });
     return;
   }
+  // The client only ever reaches this screen when the account has no
+  // driverInfo yet (ProfileScreen hides the button once it does), but that's
+  // UI, not a boundary the endpoint itself enforced — nothing stopped a
+  // second call from overwriting an *approved* driver's info and resetting
+  // applicationStatus back to 'pending', demoting them mid-shift with no
+  // warning. Resubmitting after a rejection, or before a first verdict, is
+  // the legitimate case and stays allowed.
+  if (isApprovedDriver(user.driverInfo)) {
+    res.status(409).json({ error: 'Already an approved driver' });
+    return;
+  }
   const driverInfo: DriverInfo = {
     vehicleType: body.vehicleType,
     brand: body.brand,

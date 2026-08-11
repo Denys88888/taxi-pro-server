@@ -191,3 +191,80 @@ describe('findNearbyDrivers approval filter', () => {
     expect(uids).not.toContain('d_rejected_while_online');
   });
 });
+
+describe('POST /api/drivers/register', () => {
+  const app = createApp();
+  const authFor = (uid: string): { Authorization: string } => ({
+    Authorization: `Bearer ${signToken({ uid, role: 'passenger' })}`,
+  });
+  const application = {
+    vehicleType: 'economy',
+    brand: 'Toyota',
+    model: 'Prius',
+    color: 'White',
+    number: 'AA1234BB',
+    vehicleYear: 2020,
+  };
+
+  it('accepts a first application from an account with no driverInfo yet', async () => {
+    await store().saveUser({
+      uid: 'reg_fresh',
+      role: 'passenger',
+      name: 'reg_fresh',
+      rating: 5,
+      ratingCount: 0,
+      isBlocked: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const res = await request(app).post('/api/drivers/register').set(authFor('reg_fresh')).send(application);
+    expect(res.status).toBe(201);
+    expect(res.body.user.driverInfo.applicationStatus).toBe('pending');
+  });
+
+  it('lets a rejected applicant resubmit', async () => {
+    await store().saveUser({
+      uid: 'reg_rejected',
+      role: 'passenger',
+      name: 'reg_rejected',
+      rating: 5,
+      ratingCount: 0,
+      isBlocked: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      driverInfo: baseInfo({ applicationStatus: 'rejected' }),
+    });
+    const res = await request(app).post('/api/drivers/register').set(authFor('reg_rejected')).send(application);
+    expect(res.status).toBe(201);
+    expect(res.body.user.driverInfo.applicationStatus).toBe('pending');
+  });
+
+  // The client only reaches this screen when driverInfo is absent — an
+  // already-approved driver has no button that leads here. That's UI, not a
+  // boundary the endpoint enforced: nothing on the server stopped a second
+  // call from overwriting an approved driver's info and resetting
+  // applicationStatus back to 'pending', demoting them with no warning, mid
+  // possibly-active-ride.
+  it('refuses to overwrite an already-approved driver', async () => {
+    await store().saveUser({
+      uid: 'reg_approved',
+      role: 'driver',
+      name: 'reg_approved',
+      rating: 5,
+      ratingCount: 0,
+      isBlocked: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      driverInfo: baseInfo({ applicationStatus: 'approved', licenseVerified: true, number: 'ORIGINAL-PLATE' }),
+    });
+    const res = await request(app)
+      .post('/api/drivers/register')
+      .set(authFor('reg_approved'))
+      .send({ ...application, number: 'HIJACKED-PLATE' });
+    expect(res.status).toBe(409);
+
+    const stored = await store().getUser('reg_approved');
+    expect(stored?.driverInfo?.applicationStatus).toBe('approved');
+    expect(stored?.driverInfo?.number).toBe('ORIGINAL-PLATE');
+  });
+});
