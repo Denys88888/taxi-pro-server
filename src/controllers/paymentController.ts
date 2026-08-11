@@ -172,6 +172,18 @@ export async function getPayment(req: Request, res: Response): Promise<void> {
     res.status(404).json({ error: 'Payment not found' });
     return;
   }
+  // This had no authorization at all: any authenticated user could read any
+  // payment record — amount, platform fee, driver earnings, txid, the Pi
+  // payment id — given its id. Ids carry only 32 bits of randomness on top of
+  // a guessable timestamp, so the rate limiter was the only thing standing in
+  // the way. Restricted to the ride's two participants, matching getRide,
+  // which already exposes the same figures to exactly those two.
+  const ride = await store().getRide(payment.rideId);
+  const uid = req.user!.uid;
+  if (!ride || (ride.passengerId !== uid && ride.driverId !== uid)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
   res.json(payment);
 }
 
@@ -189,7 +201,9 @@ export async function cancelIncompletePayment(req: Request, res: Response): Prom
     return;
   }
   const ride = await store().getRide(payment.rideId);
-  if (ride && ride.passengerId !== req.user!.uid) {
+  // `ride &&` here skipped the whole check when the lookup missed, the same
+  // short-circuit that left chat history readable — deny instead.
+  if (!ride || ride.passengerId !== req.user!.uid) {
     res.status(403).json({ error: 'Not the ride passenger' });
     return;
   }
@@ -254,7 +268,8 @@ export async function approvePayment(req: Request, res: Response): Promise<void>
     return;
   }
   const ride = await store().getRide(payment.rideId);
-  if (ride && ride.passengerId !== req.user!.uid) {
+  // Same short-circuit as above: a missed lookup must deny, not wave through.
+  if (!ride || ride.passengerId !== req.user!.uid) {
     res.status(403).json({ error: 'Not the ride passenger' });
     return;
   }
@@ -294,7 +309,9 @@ export async function completePayment(req: Request, res: Response): Promise<void
     return;
   }
   const rideCheck = await store().getRide(payment.rideId);
-  if (rideCheck && rideCheck.passengerId !== req.user!.uid) {
+  // Same short-circuit again, and on the call that actually moves money —
+  // completing credits the tip and marks the fare paid.
+  if (!rideCheck || rideCheck.passengerId !== req.user!.uid) {
     res.status(403).json({ error: 'Not the ride passenger' });
     return;
   }

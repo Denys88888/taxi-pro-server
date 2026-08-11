@@ -108,3 +108,65 @@ describe('block enforcement after login', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// 2026-08-11 sweep: payment endpoints checked ownership as
+// `if (ride && ride.passengerId !== uid)`, which a missed ride lookup
+// short-circuited past entirely — the same shape that left chat history
+// readable. getPayment had no ownership check at all. Rides are never
+// hard-deleted today so the short-circuit isn't reachable through a real
+// ride, but getPayment was live: any authenticated user could read any
+// payment record (amount, fees, driver earnings, txid, Pi payment id) given
+// its id, with only the rate limiter in the way.
+describe('payment authorization', () => {
+  async function seedPayment(id: string, rideId: string): Promise<void> {
+    const now = nowIso();
+    await store().savePayment({
+      id, rideId, type: 'ride', amount: 5, platformFeePercent: 10,
+      platformFee: 0.5, driverEarnings: 4.5, status: 'created',
+      createdAt: now, updatedAt: now,
+    });
+  }
+
+  it('lets the ride passenger read their own payment', async () => {
+    await seedUser({ uid: 'pay-pass', role: 'passenger' });
+    await seedRide({ id: 'pay-ride', passengerId: 'pay-pass', driverId: 'pay-drv', status: 'completed' });
+    await seedPayment('pay_own', 'pay-ride');
+    const res = await request(app).get('/api/payments/pay_own').set(auth('pay-pass'));
+    expect(res.status).toBe(200);
+    expect(res.body.amount).toBe(5);
+  });
+
+  it('lets the ride driver read it too', async () => {
+    await seedUser({ uid: 'pay-drv', role: 'driver' });
+    const res = await request(app).get('/api/payments/pay_own').set(auth('pay-drv', 'driver'));
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses a stranger reading someone else’s payment record', async () => {
+    await seedUser({ uid: 'pay-stranger', role: 'passenger' });
+    const res = await request(app).get('/api/payments/pay_own').set(auth('pay-stranger'));
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses approve/complete/cancel when the payment’s ride cannot be resolved', async () => {
+    await seedUser({ uid: 'pay-orphan', role: 'passenger' });
+    await seedPayment('pay_orphan', 'ride-that-does-not-exist');
+    const approve = await request(app)
+      .post('/api/payments/pay_orphan/approve')
+      .set(auth('pay-orphan'))
+      .send({ piPaymentId: 'pi_x' });
+    expect(approve.status).toBe(403);
+
+    const complete = await request(app)
+      .post('/api/payments/pay_orphan/complete')
+      .set(auth('pay-orphan'))
+      .send({ piPaymentId: 'pi_x', txid: 'tx_x' });
+    expect(complete.status).toBe(403);
+
+    const cancel = await request(app)
+      .post('/api/payments/pay_orphan/cancel')
+      .set(auth('pay-orphan'))
+      .send({ piPaymentId: 'pi_x' });
+    expect(cancel.status).toBe(403);
+  });
+});
