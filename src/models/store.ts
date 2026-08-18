@@ -37,7 +37,10 @@ export interface DataStore {
     page: number,
     limit: number
   ): Promise<PaginatedRides>;
-  listAllRides(status?: RideStatus): Promise<Ride[]>;
+  // An array asks for the union of those statuses in ONE round trip. The
+  // scheduler needs five of them every tick, and on Firestore each separate
+  // query is billed a read even when it matches nothing.
+  listAllRides(status?: RideStatus | RideStatus[]): Promise<Ride[]>;
   // Time-bounded variant. The callers that only ever look at a recent window
   // (heatmap: 30 min, analytics: 14 days) must not pull the whole collection
   // and discard most of it — that cost grows with every ride ever taken.

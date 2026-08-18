@@ -21,6 +21,18 @@ import type { DataStore, PaginatedRides } from './store';
 
 const SETTINGS_DOC = 'global';
 
+// The settings doc is read on nearly every hot path — every fare estimate, every
+// ride request, every driver going online — plus once per 30-second scheduler
+// tick, and it changes only when an admin saves the form. On Firestore's free
+// tier (50k reads/day) that one unchanging document was quietly spending
+// thousands of reads a day; running out of quota is what crashed the API.
+//
+// A local admin save refreshes the cache immediately, so the only staleness this
+// can introduce is a change made by *another* instance, which the short TTL
+// bounds. Nothing here decides money on its own — fares are recomputed from the
+// settings actually returned.
+const SETTINGS_TTL_MS = 60_000;
+
 // Firestore-backed persistence. Collections and field names follow the schema in
 // the project spec. Uses update() (not set) for partial patches so we never
 // clobber unrelated fields on a concurrent write.
@@ -28,6 +40,9 @@ export class FirestoreStore implements DataStore {
   private db(): adminNs.firestore.Firestore {
     return getFirestore();
   }
+
+  private settingsCache: { value: Settings; at: number } | null = null;
+  private settingsInFlight: Promise<Settings> | null = null;
 
   async getUser(uid: string): Promise<User | null> {
     const snap = await this.db().collection('users').doc(uid).get();
@@ -93,14 +108,19 @@ export class FirestoreStore implements DataStore {
     const start = (page - 1) * limit;
     return { rides: list.slice(start, start + limit), total, page, limit };
   }
-  async listAllRides(status?: RideStatus): Promise<Ride[]> {
+  async listAllRides(status?: RideStatus | RideStatus[]): Promise<Ride[]> {
     // status + orderBy(createdAt) needs a composite index Firestore doesn't
     // have; filter server-side and sort in memory so the scheduler never dies.
+    // `in` covers several statuses in one query and is served by the automatic
+    // single-field index, same as `==`.
+    const wanted = status === undefined ? [] : Array.isArray(status) ? status : [status];
     let q: adminNs.firestore.Query = this.db().collection('rides');
-    q = status ? q.where('status', '==', status) : q.orderBy('createdAt', 'desc');
+    if (wanted.length === 1) q = q.where('status', '==', wanted[0]);
+    else if (wanted.length > 1) q = q.where('status', 'in', wanted);
+    else q = q.orderBy('createdAt', 'desc');
     const snap = await q.get();
     const rides = snap.docs.map((d) => d.data() as Ride);
-    return status ? rides.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : rides;
+    return wanted.length ? rides.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : rides;
   }
 
   async listRidesSince(sinceIso: string, status?: RideStatus): Promise<Ride[]> {
@@ -240,13 +260,25 @@ export class FirestoreStore implements DataStore {
   }
 
   async getSettings(): Promise<Settings> {
+    const cached = this.settingsCache;
+    if (cached && Date.now() - cached.at < SETTINGS_TTL_MS) return { ...cached.value };
+    // Concurrent callers share one read instead of racing five of their own.
+    this.settingsInFlight ??= this.fetchSettings().finally(() => {
+      this.settingsInFlight = null;
+    });
+    return { ...(await this.settingsInFlight) };
+  }
+
+  private async fetchSettings(): Promise<Settings> {
     const snap = await this.db().collection('settings').doc(SETTINGS_DOC).get();
+    const value = snap.exists ? (snap.data() as Settings) : { ...DEFAULT_SETTINGS };
     if (!snap.exists) {
       await this.db().collection('settings').doc(SETTINGS_DOC).set(DEFAULT_SETTINGS);
-      return { ...DEFAULT_SETTINGS };
     }
-    return snap.data() as Settings;
+    this.settingsCache = { value, at: Date.now() };
+    return value;
   }
+
   async updateSettings(patch: Partial<Settings>, updatedBy: string): Promise<Settings> {
     const ref = this.db().collection('settings').doc(SETTINGS_DOC);
     await ref.set(
@@ -254,6 +286,10 @@ export class FirestoreStore implements DataStore {
       { merge: true }
     );
     const snap = await ref.get();
-    return snap.data() as Settings;
+    const value = snap.data() as Settings;
+    // Refresh rather than invalidate: an admin who just saved must see the new
+    // value on the very next screen, not whatever a re-read happens to return.
+    this.settingsCache = { value, at: Date.now() };
+    return value;
   }
 }

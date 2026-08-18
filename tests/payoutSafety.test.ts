@@ -233,3 +233,25 @@ describe('cancellation-fee payouts are visible and retryable', () => {
     expect(res.body.txid).toBe('stellar_fee_already_settled');
   });
 });
+
+// The production outage this pins down: a Firestore `8 RESOURCE_EXHAUSTED`
+// raised inside a payout that nobody awaits (every caller uses
+// `void payoutDriver(...)`) became an unhandled promise rejection, and Node
+// exits the process for those. One ride's payout killed the whole API —
+// every socket, every in-flight request — and did it again on the next tick.
+describe('a payout that hits a broken database', () => {
+  it('settles instead of rejecting, because no caller is there to catch it', async () => {
+    const ride = await seedRideWithSettledTransfer({
+      driverPayoutStatus: undefined,
+      driverPayoutTxid: undefined,
+    });
+    const quotaExceeded = jest
+      .spyOn(store(), 'updateRide')
+      .mockRejectedValue(new Error('8 RESOURCE_EXHAUSTED: Quota exceeded.'));
+
+    await expect(payoutDriver(ride, 'fare', ride.driverEarnings)).resolves.toBeUndefined();
+
+    expect(quotaExceeded).toHaveBeenCalled();
+    quotaExceeded.mockRestore();
+  });
+});

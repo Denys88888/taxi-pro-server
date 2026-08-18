@@ -11,6 +11,7 @@ import { env } from '../config/env';
 import { sendToUser } from '../websocket/broadcast';
 import { genId, nowIso, round } from '../utils/helpers';
 import { logger } from '../utils/logger';
+import { captureException } from '../utils/sentry';
 import type { Payment, Ride } from '../types';
 
 // Payouts currently in-flight this process, keyed `${rideId}:${kind}`. The
@@ -397,6 +398,28 @@ export type PayoutKind = keyof typeof PAYOUT_FIELDS;
 // PI_WALLET_SEED configured, this silently no-ops (logged once at startup);
 // funds simply stay queued as 'pending' until an operator backfills them.
 export async function payoutDriver(ride: Ride, kind: PayoutKind, amount: number): Promise<void> {
+  // Fire-and-forget by contract: every caller reaches this as `void
+  // payoutDriver(…)` because the passenger's payment is already settled and
+  // must neither wait on the driver's payout nor fail with it. But a promise
+  // nobody awaits that rejects is an unhandled rejection, and Node kills the
+  // process for those — one Firestore quota error in here took the whole API
+  // down in production and kept taking it down. So the buck stops at this
+  // boundary: log it, report it, and leave the server serving.
+  try {
+    await runPayout(ride, kind, amount);
+  } catch (err) {
+    logger.error('[Payout] aborted by an unexpected error', {
+      rideId: ride.id,
+      driverId: ride.driverId,
+      kind,
+      amount,
+      error: (err as Error).message,
+    });
+    captureException(err);
+  }
+}
+
+async function runPayout(ride: Ride, kind: PayoutKind, amount: number): Promise<void> {
   if (!ride.driverId || amount <= 0) return;
   const statusField = PAYOUT_FIELDS[kind].status;
   const txidField = PAYOUT_FIELDS[kind].txid;

@@ -186,12 +186,15 @@ export class SqliteStore implements DataStore {
     return { rides: rows.map((r) => JSON.parse(r.data) as Ride), total, page, limit };
   }
 
-  async listAllRides(status?: RideStatus): Promise<Ride[]> {
+  async listAllRides(status?: RideStatus | RideStatus[]): Promise<Ride[]> {
+    const wanted = status === undefined ? [] : Array.isArray(status) ? status : [status];
     const rows = (
-      status
+      wanted.length
         ? this.db
-            .prepare('SELECT data FROM rides WHERE status = ? ORDER BY created_at DESC')
-            .all(status)
+            .prepare(
+              `SELECT data FROM rides WHERE status IN (${wanted.map(() => '?').join(',')}) ORDER BY created_at DESC`
+            )
+            .all(...wanted)
         : this.db.prepare('SELECT data FROM rides ORDER BY created_at DESC').all()
     ) as { data: string }[];
     return rows.map((r) => JSON.parse(r.data) as Ride);

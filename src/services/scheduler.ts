@@ -1,4 +1,5 @@
 import { store } from '../models';
+import type { Ride, RideStatus } from '../types';
 import { nowIso } from '../utils/helpers';
 import { broadcastToDriversOfType, sendToUser } from '../websocket/broadcast';
 import { releaseHeldPayment } from '../controllers/paymentController';
@@ -29,9 +30,22 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
 
       const settings = await store().getSettings();
 
+      // One query for every status this tick touches. Firestore bills a read per
+      // query even when it matches nothing, so five separate polls twice a
+      // minute cost ~14k reads a day on an idle app — enough on their own to
+      // exhaust the free tier's 50k and take the API down with a quota error.
+      const live = await store().listAllRides([
+        'scheduled',
+        'searching',
+        'assigned',
+        'arrived',
+        'in_progress',
+      ]);
+      const byStatus = (s: RideStatus): Ride[] => live.filter((r) => r.status === s);
+
       // Promote scheduled rides whose time has arrived — same distance
       // filter as immediate rides.
-      const scheduled = await store().listAllRides('scheduled');
+      const scheduled = byStatus('scheduled');
       for (const ride of scheduled) {
         try {
           if (ride.scheduledAt && new Date(ride.scheduledAt).getTime() <= now) {
@@ -81,7 +95,7 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
       // waiting — a first-pass radius that turned up no takers doesn't mean
       // the ride is a lost cause, just that the closest drivers aren't
       // biting.
-      const searching = await store().listAllRides('searching');
+      const searching = byStatus('searching');
       // Purge tracked-expanded ids for rides no longer in 'searching' (took
       // an offer, was cancelled, whatever) — otherwise this Set grows
       // unbounded across the process lifetime for every ride that ever
@@ -154,7 +168,7 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
         { status: 'arrived' as const, timeout: ARRIVED_TIMEOUT_MS },
       ];
       for (const { status, timeout } of stuckStatuses) {
-        const rides = await store().listAllRides(status);
+        const rides = byStatus(status);
         for (const ride of rides) {
           try {
             if (now - new Date(ride.updatedAt ?? ride.createdAt).getTime() > timeout) {
@@ -188,7 +202,7 @@ export function startScheduler(intervalMs = 30_000): ReturnType<typeof setInterv
       }
 
       // Flag rides stuck in_progress for too long (possible app crash).
-      const inProgress = await store().listAllRides('in_progress');
+      const inProgress = byStatus('in_progress');
       for (const ride of inProgress) {
         try {
           if (now - new Date(ride.updatedAt ?? ride.createdAt).getTime() > IN_PROGRESS_TIMEOUT_MS) {

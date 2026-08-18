@@ -75,11 +75,13 @@ export class MemoryStore implements DataStore {
     const start = (page - 1) * limit;
     return { rides: list.slice(start, start + limit), total, page, limit };
   }
-  async listAllRides(status?: RideStatus): Promise<Ride[]> {
+  async listAllRides(status?: RideStatus | RideStatus[]): Promise<Ride[]> {
     const list = Array.from(this.rides.values()).sort((a, b) =>
       b.createdAt.localeCompare(a.createdAt)
     );
-    return status ? list.filter((r) => r.status === status) : list;
+    if (!status) return list;
+    const wanted = Array.isArray(status) ? new Set(status) : new Set([status]);
+    return list.filter((r) => wanted.has(r.status));
   }
 
   async listRidesSince(sinceIso: string, status?: RideStatus): Promise<Ride[]> {
