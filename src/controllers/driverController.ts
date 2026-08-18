@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
 import { findNearbyDrivers } from '../services/rideMatching';
+import { forgetOnlineDrivers } from '../services/onlineDrivers';
 import { forgetDriverLocation, persistDriverLocation } from '../services/driverLocation';
 import { nowIso, round, isApprovedDriver } from '../utils/helpers';
 import type { DriverInfo, GeoPoint, VehicleType } from '../types';
@@ -50,6 +51,7 @@ export async function registerDriver(req: Request, res: Response): Promise<void>
   };
   // Role stays 'passenger' until an admin verifies; store the pending driverInfo.
   const updated = await store().updateUser(req.user!.uid, { driverInfo });
+  forgetOnlineDrivers();
   res.status(201).json({ status: 'pending_verification', user: updated });
 }
 
@@ -115,6 +117,7 @@ export async function goOnline(req: Request, res: Response): Promise<void> {
   await store().updateUser(req.user!.uid, {
     driverInfo: { ...user.driverInfo, isOnline: true, lastLocation },
   });
+  forgetOnlineDrivers();
   res.json({ success: true, isOnline: true });
 }
 
@@ -129,5 +132,6 @@ export async function goOffline(req: Request, res: Response): Promise<void> {
   await store().updateUser(req.user!.uid, {
     driverInfo: { ...user.driverInfo, isOnline: false },
   });
+  forgetOnlineDrivers();
   res.json({ success: true, isOnline: false });
 }

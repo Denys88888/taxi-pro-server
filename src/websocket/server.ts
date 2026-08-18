@@ -7,6 +7,7 @@ import { logger } from '../utils/logger';
 import { isApprovedDriver } from '../utils/helpers';
 import { handleMessage } from './handlers';
 import { forgetDriverLocation } from '../services/driverLocation';
+import { forgetOnlineDrivers } from '../services/onlineDrivers';
 import {
   registerSocket,
   unregisterSocket,
@@ -159,6 +160,7 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
               await store().updateUser(ws.userId!, {
                 driverInfo: { ...u.driverInfo, isOnline: false },
               });
+              forgetOnlineDrivers();
             }
           } catch {
             /* best effort — the socket-level flag is already flipped */

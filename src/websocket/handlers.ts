@@ -10,6 +10,7 @@ import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
 import { initialOffered } from '../services/scheduler';
 import { forgetDriverLocation, persistDriverLocation } from '../services/driverLocation';
+import { forgetOnlineDrivers } from '../services/onlineDrivers';
 
 const acceptingRides = new Set<string>();
 import type { Ride, GeoPoint } from '../types';
@@ -122,6 +123,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
           lastLocation: { lat: p.lat, lng: p.lng },
         },
       });
+      forgetOnlineDrivers();
       // Keep the live socket's vehicle class + location in sync so ride
       // dispatch (which filters by ws.vehicleType/ws.driverLocation, not a
       // DB lookup) offers this driver only rides matching what they're
@@ -141,6 +143,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         await store().updateUser(uid, {
           driverInfo: { ...user.driverInfo, isOnline: false },
         });
+        forgetOnlineDrivers();
       }
       ws.driverOnline = false;
       send(ws, { type: 'ride_status_update', rideId: '', status: 'offline', data: {} });

@@ -7,6 +7,8 @@ import {
   driverEarnedFrom,
 } from '../utils/helpers';
 import { sendToUser, closeUserSocket } from '../websocket/broadcast';
+import { forgetOnlineDrivers } from '../services/onlineDrivers';
+import { forgetBlockCheck } from '../middleware/auth';
 import { payoutDriver, PAYOUT_FIELDS, type PayoutKind } from './paymentController';
 import { cancelPayment as piCancelPayment } from '../services/piService';
 import type { Settings, Role, RideStatus, Ride } from '../types';
@@ -261,6 +263,12 @@ export async function updateUserBlock(req: Request, res: Response): Promise<void
     res.status(404).json({ error: 'User not found' });
     return;
   }
+  if (isBlocked !== undefined) {
+    // requireAuth caches this flag for a minute to keep a per-request read off
+    // Firestore; drop the entry so the ban (or the pardon) lands on the very
+    // next request instead of whenever that minute happens to run out.
+    forgetBlockCheck(req.params.id);
+  }
   if (isBlocked) {
     // Deliver the block notice, then sever the live socket so the banned user
     // can't keep acting over their existing connection.
@@ -432,6 +440,7 @@ export async function resolveReport(req: Request, res: Response): Promise<void> 
           isBlocked: true,
           blockReason: `Auto-blocked: ${strikeCount} resolved reports`,
         });
+        forgetBlockCheck(updated.reportedId);
         closeUserSocket(updated.reportedId, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
         // Same cleanup the manual block does — an auto-block is no less final
         // for whoever is mid-ride with them.
@@ -475,6 +484,7 @@ export async function verifyDriver(req: Request, res: Response): Promise<void> {
           applicationStatus: 'rejected',
         },
       });
+  forgetOnlineDrivers();
   const wsPayload: Record<string, unknown> = {
     type: 'ride_status_update',
     rideId: '',

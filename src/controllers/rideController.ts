@@ -6,6 +6,7 @@ import { getSurge } from '../services/surgeService';
 import { releaseHeldPayment } from './paymentController';
 import { genId, nowIso, round, isApprovedDriver } from '../utils/helpers';
 import { signShareToken } from '../utils/jwt';
+import { TtlCache } from '../utils/ttlCache';
 import {
   LATE_CANCELLATION_FEE_PERCENT,
   FREE_CANCELLATION_AFTER_ARRIVAL_MIN,
@@ -186,9 +187,20 @@ export async function getSurgeInfo(req: Request, res: Response): Promise<void> {
 // rides from the last 30 minutes, so requests created before the driver
 // connected are not lost (the live 'ride_available' WS event only reaches
 // drivers connected at creation time).
+// Same answer for every driver, asked for by each of them every 15 seconds.
+// Slowing the poll down would have cost responsiveness; sharing the query costs
+// nothing, and makes the price of this endpoint flat instead of one more bill
+// per driver on shift.
+//
+// A ride accepted seconds ago can still appear here until the entry expires,
+// but that race predates the cache and the server already settles it: taking a
+// ride re-reads its real state and refuses if someone else got there first.
+const OPEN_RIDES_TTL_MS = 10_000;
+const openRides = new TtlCache<Ride[]>(OPEN_RIDES_TTL_MS, 1);
+
 export async function listOpenRides(req: Request, res: Response): Promise<void> {
   const since = Date.now() - 30 * 60 * 1000;
-  const searching = await store().listAllRides('searching');
+  const searching = await openRides.get('all', () => store().listAllRides('searching'));
   const rides = searching
     .filter(
       (r) =>
@@ -207,18 +219,33 @@ export async function listOpenRides(req: Request, res: Response): Promise<void> 
 // GET /api/rides/heatmap — demand hotspots for drivers: pickups of rides that
 // went unserved (still searching or cancelled) in the last 30 minutes, grouped
 // into ~1 km cells with a weight per cell.
-export async function getHeatmap(_req: Request, res: Response): Promise<void> {
-  // Every driver's map hits this. Bound the read to the 30-minute window in the
-  // query — listing all cancelled rides and then discarding the old ones meant
-  // the cost of this endpoint grew with every ride the platform had ever taken.
+interface HeatCell {
+  lat: number;
+  lng: number;
+  weight: number;
+}
+
+// The answer takes no parameters — it is the same picture of the last half hour
+// for every driver looking at it — yet every driver online asked for it on their
+// own timer, each request paying to read the whole window again. Computed once
+// and shared instead. A minute of lag is nothing against a 30-minute window
+// that only ever shifts by whole rides.
+const HEATMAP_TTL_MS = 60_000;
+const heatmap = new TtlCache<HeatCell[]>(HEATMAP_TTL_MS, 1);
+
+async function buildHeatmap(): Promise<HeatCell[]> {
+  // Bound the read to the 30-minute window in the query — listing all cancelled
+  // rides and then discarding the old ones meant the cost of this endpoint grew
+  // with every ride the platform had ever taken.
   const since = Date.now() - 30 * 60 * 1000;
   const sinceIso = new Date(since).toISOString();
-  const [searching, cancelled] = await Promise.all([
-    store().listRidesSince(sinceIso, 'searching'),
-    store().listRidesSince(sinceIso, 'cancelled'),
-  ]);
-  const cells = new Map<string, { lat: number; lng: number; weight: number }>();
-  for (const ride of [...searching, ...cancelled]) {
+  // One query, not one per status: the store cannot filter status and a time
+  // range together without a composite index, so asking for each status
+  // separately read the identical set of documents twice and threw half away.
+  const recent = await store().listRidesSince(sinceIso);
+  const cells = new Map<string, HeatCell>();
+  for (const ride of recent) {
+    if (ride.status !== 'searching' && ride.status !== 'cancelled') continue;
     if (new Date(ride.createdAt).getTime() < since) continue;
     const lat = Math.round(ride.pickup.lat * 100) / 100;
     const lng = Math.round(ride.pickup.lng * 100) / 100;
@@ -227,7 +254,11 @@ export async function getHeatmap(_req: Request, res: Response): Promise<void> {
     cell.weight += 1;
     cells.set(key, cell);
   }
-  res.json({ points: [...cells.values()] });
+  return [...cells.values()];
+}
+
+export async function getHeatmap(_req: Request, res: Response): Promise<void> {
+  res.json({ points: await heatmap.get('all', buildHeatmap) });
 }
 
 // Build a public-safe party view from a user, honoring the caller's visibility.

@@ -1,4 +1,4 @@
-import { store } from '../models';
+import { listOnlineDriversCached } from './onlineDrivers';
 import { haversineKm, isApprovedDriver } from '../utils/helpers';
 import {
   DEFAULT_SEARCH_RADIUS_KM,
@@ -18,7 +18,7 @@ export async function findNearbyDrivers(
   vehicleType?: VehicleType,
   radiusKm: number = DEFAULT_SEARCH_RADIUS_KM
 ): Promise<NearbyDriver[]> {
-  const online = await store().listOnlineDrivers();
+  const online = await listOnlineDriversCached();
 
   const within = (radius: number): NearbyDriver[] =>
     online
