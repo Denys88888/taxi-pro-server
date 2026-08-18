@@ -1,5 +1,6 @@
 import rateLimit from 'express-rate-limit';
 import type { Request } from 'express';
+import { env } from '../config/env';
 
 // Key per authenticated user, falling back to IP for anonymous requests.
 //
@@ -14,10 +15,18 @@ import type { Request } from 'express';
 // anonymous traffic is limited exactly as before.
 const byUserOrIp = (req: Request): string => req.user?.uid ?? req.ip ?? 'unknown';
 
+// Outside production the only client is a test suite or a developer, and both
+// legitimately make far more calls a minute than a person on a phone does — an
+// end-to-end run polls ride status hard while two browsers drive a ride. A 429
+// there is indistinguishable from the app being broken, and the last one cost an
+// afternoon before it was traced back to this file. Production is unchanged;
+// these limits exist to blunt abuse of the deployed API, and there is none here.
+const cap = (production: number, local: number): number => (env.isProd ? production : local);
+
 // Global API limiter: 100 requests / minute.
 export const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  max: cap(100, 10_000),
   standardHeaders: true,
   legacyHeaders: false,
   // Mounted at the /api root, ahead of route-level auth, so this one is
@@ -29,7 +38,7 @@ export const apiLimiter = rateLimit({
 // Auth limiter: 10 login attempts / minute / IP.
 export const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  max: cap(10, 1_000),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts. Try again shortly.' },
