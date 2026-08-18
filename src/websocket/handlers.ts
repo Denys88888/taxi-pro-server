@@ -9,6 +9,7 @@ import { genId, nowIso, haversineKm, isApprovedDriver } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
 import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
 import { initialOffered } from '../services/scheduler';
+import { forgetDriverLocation, persistDriverLocation } from '../services/driverLocation';
 
 const acceptingRides = new Set<string>();
 import type { Ride, GeoPoint } from '../types';
@@ -134,6 +135,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
     }
 
     case 'driver_offline': {
+      forgetDriverLocation(uid);
       const user = await store().getUser(uid);
       if (user?.driverInfo) {
         await store().updateUser(uid, {
@@ -349,15 +351,10 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
         }
       }
       ws.lastLocationAt = nowLoc;
-      // Update the live socket first (dispatch reads it synchronously),
-      // then persist to the store.
+      // Update the live socket first — dispatch reads it synchronously and so
+      // stays exact — then let the store copy lag behind on purpose.
       ws.driverLocation = { lat, lng };
-      const driver = await store().getUser(uid);
-      if (driver?.driverInfo) {
-        await store().updateUser(uid, {
-          driverInfo: { ...driver.driverInfo, lastLocation: { lat, lng } },
-        });
-      }
+      await persistDriverLocation(uid, { lat, lng });
       // rideId is optional: an idle online driver pings location with no ride
       // attached (that ping is what keeps them from being auto-set offline).
       // Looking up an empty document id throws in Firestore, so only resolve

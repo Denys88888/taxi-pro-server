@@ -6,6 +6,7 @@ import { store } from '../models';
 import { logger } from '../utils/logger';
 import { isApprovedDriver } from '../utils/helpers';
 import { handleMessage } from './handlers';
+import { forgetDriverLocation } from '../services/driverLocation';
 import {
   registerSocket,
   unregisterSocket,
@@ -126,6 +127,7 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
     });
 
     ws.on('close', () => {
+      forgetDriverLocation(payload.uid);
       unregisterSocket(payload.uid, ws);
       logger.info('[WS] disconnected', { uid: payload.uid });
     });

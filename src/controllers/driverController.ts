@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { store } from '../models';
 import { findNearbyDrivers } from '../services/rideMatching';
+import { forgetDriverLocation, persistDriverLocation } from '../services/driverLocation';
 import { nowIso, round, isApprovedDriver } from '../utils/helpers';
 import type { DriverInfo, GeoPoint, VehicleType } from '../types';
 
@@ -55,15 +56,13 @@ export async function registerDriver(req: Request, res: Response): Promise<void>
 // POST /api/drivers/location — update the driver's current GPS position.
 export async function updateLocation(req: Request, res: Response): Promise<void> {
   const { lat, lng } = req.body as { lat: number; lng: number };
-  const user = await store().getUser(req.user!.uid);
-  if (!user?.driverInfo) {
+  const lastLocation: GeoPoint = { lat, lng };
+  // The app sends every position twice — here and over the socket — so the two
+  // channels share one throttle, and the second of each pair costs nothing.
+  if (!(await persistDriverLocation(req.user!.uid, lastLocation))) {
     res.status(400).json({ error: 'Not a driver' });
     return;
   }
-  const lastLocation: GeoPoint = { lat, lng };
-  await store().updateUser(req.user!.uid, {
-    driverInfo: { ...user.driverInfo, lastLocation },
-  });
   res.json({ success: true, lastLocation, updatedAt: nowIso() });
 }
 
@@ -121,6 +120,7 @@ export async function goOnline(req: Request, res: Response): Promise<void> {
 
 // POST /api/drivers/offline — go offline.
 export async function goOffline(req: Request, res: Response): Promise<void> {
+  forgetDriverLocation(req.user!.uid);
   const user = await store().getUser(req.user!.uid);
   if (!user?.driverInfo) {
     res.status(400).json({ error: 'Not a driver' });
