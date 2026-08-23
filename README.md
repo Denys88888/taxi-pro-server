@@ -71,7 +71,6 @@ This lets you develop and run the full test suite with zero external services.
 | `FIREBASE_PRIVATE_KEY` | for persistence | One line, literal `\n` for newlines. |
 | `CORS_ORIGINS` | | Comma-separated whitelist. |
 | `PORT` | | Defaults to `10000` (Render injects it). |
-| `RENDER_URL` | | Public URL; enables 14-min keep-alive self-ping. |
 
 ## API surface
 
@@ -102,6 +101,14 @@ with code `1008`. See `src/websocket/handlers.ts` for the full message catalog
 ## Deployment (Render, Docker)
 
 `render.yaml` defines a free-tier Docker web service. Set the `sync: false` secrets
-(`PI_API_KEY`, `JWT_SECRET`, the three `FIREBASE_*` vars, `RENDER_URL`) in the
-Render dashboard. The `Dockerfile` builds TypeScript and runs `node dist/index.js`
+(`PI_API_KEY`, `JWT_SECRET` and the three `FIREBASE_*` vars) in the Render
+dashboard.
+
+The instance sleeps after 15 idle minutes and nothing here pings it awake. That
+is deliberate: free instance hours are billed only while an instance runs, and
+the workspace pool is 750 a month against the 744 a single never-sleeping
+service costs. Keeping this one warm suspended it, pifix-api and
+stayfind-backend together on 22 Aug 2026. The cost of sleeping is a ~50s cold
+start on the first request after idle, which the client's 60s timeout covers;
+if that stops being acceptable the answer is a paid instance type, not a ping. The `Dockerfile` builds TypeScript and runs `node dist/index.js`
 on port `10000`.

@@ -20,8 +20,6 @@ services:
         sync: false
       - key: CORS_ORIGINS
         value: https://denys88888.github.io
-      - key: RENDER_URL
-        sync: false
       # SQLite DB path.
       #
       # WARNING: on the free plan the container filesystem is EPHEMERAL. With no
