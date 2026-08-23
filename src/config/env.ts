@@ -30,7 +30,6 @@ const schema = z.object({
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
   CORS_ORIGINS: z.string().default('https://denys88888.github.io'),
-  RENDER_URL: z.string().optional(),
   // Comma-separated Pi UIDs that are automatically promoted to role='admin' on login.
   ADMIN_UIDS: z.string().optional(),
   // Path to the SQLite database file (primary durable store). ':memory:' for tests.

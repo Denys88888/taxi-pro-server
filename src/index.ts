@@ -23,17 +23,19 @@ server.listen(env.PORT, () => {
   });
 });
 
-// ─── Keep-alive (Render free tier sleeps after 15 min idle) ───────────────────
-// Render provides RENDER_EXTERNAL_URL automatically; RENDER_URL overrides it.
-const keepAliveUrl = env.RENDER_URL ?? process.env.RENDER_EXTERNAL_URL;
-if (keepAliveUrl) {
-  setInterval(() => {
-    fetch(`${keepAliveUrl}/api/health`).catch(() => {
-      /* transient network error — the next tick retries */
-    });
-  }, 10 * 60 * 1000);
-  logger.info('[Server] Keep-alive self-ping enabled.', { url: keepAliveUrl });
-}
+// ─── No keep-alive on purpose ─────────────────────────────────────────────────
+// A self-ping every 10 minutes used to live here, so the free instance would
+// never hit Render's 15-minute idle spin-down. It could not do the one thing
+// worth doing — a spun-down instance has no process left to ping itself awake —
+// so all it ever achieved was preventing sleep. Free instance hours are billed
+// only while an instance runs, and the workspace pool is 750 hours a month
+// against the 744 a single always-warm service costs; on 22 Aug 2026 that
+// suspended this API and pifix-api together. The original reason is gone in any
+// case: it guarded an ephemeral SQLite file, and production runs Firestore,
+// which survives a spin-down untouched. The cost of sleeping is a ~50s cold
+// start on the first request after idle, which the client's 60s timeout covers.
+// If cold starts stop being acceptable, the answer is a paid instance type, not
+// a ping.
 
 // ─── Last-resort process guards ───────────────────────────────────────────────
 // A rejection nobody caught used to take the whole API down with it: Node's
