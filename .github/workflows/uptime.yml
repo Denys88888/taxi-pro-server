@@ -1,0 +1,67 @@
+# Does production answer, and is it running what we think it is?
+#
+# Deliberately NOT a keep-alive. This ran every 10 minutes, which meant the
+# free instance never reached Render's 15-minute idle spin-down and billed all
+# 744 hours of the month against a workspace pool of 750 — that is what
+# suspended taxi-pro-server, pifix-api and stayfind-backend together on 22 Aug
+# 2026. Four checks a day keep the instance warm for about an hour a day and
+# still surface an outage the same day it starts.
+name: Uptime
+
+on:
+  schedule:
+    # Off the hour: GitHub drops scheduled runs when the whole fleet asks at :00.
+    - cron: '17 3,9,15,21 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check /api/health
+        run: |
+          set -uo pipefail
+          body=$(mktemp)
+          # First request after a spin-down waits on a ~50s cold start, so a
+          # slow answer is not an outage. Retry once before believing it.
+          code=$(curl -s -o "$body" -w '%{http_code}' \
+            --max-time 120 --retry 2 --retry-delay 30 --retry-all-errors \
+            https://taxi-pro-server.onrender.com/api/health) || code=000
+          echo "HTTP $code"
+          head -c 2000 "$body"; echo
+
+          # Render answers a suspended service with a plain HTML page. That is
+          # a billing state the owner already knows about, and it lasts until
+          # the next billing period — failing here mailed them ~90 times a day
+          # and buried the alerts that actually mean something.
+          if grep -qi 'service has been suspended' "$body"; then
+            echo "::warning title=Service suspended::Suspended on Render (free instance hours exhausted). Not an application fault — no action from CI."
+            exit 0
+          fi
+
+          if [ "$code" != "200" ]; then
+            echo "::error title=API down::/api/health answered HTTP $code"
+            exit 1
+          fi
+
+          # A failed build leaves the previous instance answering 200, so
+          # `status: ok` on its own proves nothing about what is running.
+          python3 - "$body" <<'PY'
+          import json, sys
+          h = json.load(open(sys.argv[1]))
+          print('store =', h.get('store'), '| commit =', h.get('commit'),
+                '| wallet =', h.get('wallet'), '| sandbox =', h.get('sandbox'))
+          if h.get('status') != 'ok':
+              print(f"::error title=API unhealthy::status={h.get('status')!r}")
+              sys.exit(1)
+          # Without PI_WALLET_SEED every driver payout parks as
+          # 'no_wallet_configured': rides complete, drivers are never paid, and
+          # nothing outside the logs says why.
+          if not h.get('wallet'):
+              print('::error title=Payouts disabled::PI_WALLET_SEED is not set — driver payouts will silently no-op.')
+              sys.exit(1)
+          # In-memory means every ride and payout record dies on the next restart.
+          if h.get('store') == 'memory':
+              print('::error title=No durable store::Serving out of RAM — rides and payouts are lost on restart.')
+              sys.exit(1)
+          PY
