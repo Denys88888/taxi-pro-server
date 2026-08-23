@@ -2,7 +2,13 @@ services:
   - type: web
     name: taxi-pro-server
     runtime: docker
-    plan: free
+    # Starter, not free, since 23 Aug 2026. Free instances spin down after 15
+    # idle minutes and bill their hours against a 750-a-month pool shared by
+    # every free service in the workspace — keeping this one warm exhausted
+    # that pool and suspended pifix-api and stayfind-backend along with it.
+    # Paid also unlocks a persistent disk, which is what SQLITE_PATH below
+    # needs to survive a deploy.
+    plan: starter
     envVars:
       - key: PORT
         value: 10000
