@@ -17,6 +17,7 @@ import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/br
 import { initialOffered } from '../services/scheduler';
 import { hasLiveRide } from '../services/activeRide';
 import { findUnpaidFare } from '../services/unpaidFare';
+import { transitionRide, type DriverStatus } from '../services/rideTransition';
 import { findOutstandingFee } from '../services/cancellationFee';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty, Role } from '../types';
 
@@ -592,4 +593,31 @@ export async function shareRide(req: Request, res: Response): Promise<void> {
   const shareToken = signShareToken(ride.id);
   await store().updateRide(ride.id, { shareToken });
   res.json({ shareToken });
+}
+
+// POST /api/rides/:id/status — the driver moves their ride along.
+//
+// This exists because the socket could not answer. Arrived, started and
+// completed all used to be fire-and-forget WebSocket frames: a phone whose
+// connection had gone half-open — routine on mobile, and invisible, since
+// readyState still says OPEN — wrote the frame into nothing and moved its own
+// screen on. The server never heard. A driver would reload mid-trip and be
+// guided back to the passenger because the ride was still 'arrived' as far as
+// the server knew, and a lost 'completed' left a fare unsettled.
+//
+// Repeating a request that already succeeded is safe (see transitionRide), so
+// a client that times out can simply try again.
+export async function setRideStatus(req: Request, res: Response): Promise<void> {
+  const result = await transitionRide(
+    req.user!.uid,
+    req.params.id,
+    req.body.status as DriverStatus
+  );
+  if (!result.ok) {
+    const code = result.code === 'NO_RIDE' ? 404 : result.code === 'FORBIDDEN' ? 403 : 409;
+    res.status(code).json({ error: result.message, code: result.code });
+    return;
+  }
+  // The ride itself, so the app follows the server rather than its own guess.
+  res.json(result.ride);
 }

@@ -18,6 +18,7 @@ import {
   getSurgeInfo,
   getHeatmap,
   listOpenRides,
+  setRideStatus,
 } from '../controllers/rideController';
 
 const router = Router();
@@ -45,6 +46,11 @@ const offerSchema = z.object({
   etaMin: z.number().int().min(0).max(120).optional(),
 });
 const acceptOfferSchema = z.object({ driverId: z.string().min(1) });
+// Only the three a driver drives. Cancelling has its own endpoint, and
+// nothing may put a ride back to 'searching' from here.
+const statusSchema = z.object({
+  status: z.enum(['arrived', 'in_progress', 'completed']),
+});
 
 const updateSchema = z
   .object({
@@ -83,6 +89,12 @@ router.get('/heatmap', asyncHandler(getHeatmap));
 router.get('/:id', asyncHandler(getRide));
 router.patch('/:id', validate(updateSchema), asyncHandler(updateRide));
 router.post('/:id/cancel', validate(cancelSchema), asyncHandler(cancelRide));
+router.post(
+  '/:id/status',
+  requireRole('driver'),
+  validate(statusSchema),
+  asyncHandler(setRideStatus)
+);
 router.post('/:id/share', asyncHandler(shareRide));
 router.post('/:id/offers', requireRole('driver'), validate(offerSchema), asyncHandler(submitOffer));
 router.post('/:id/offers/accept', validate(acceptOfferSchema), asyncHandler(acceptOffer));

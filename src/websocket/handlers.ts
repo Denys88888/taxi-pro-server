@@ -11,6 +11,7 @@ import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocke
 import { initialOffered } from '../services/scheduler';
 import { forgetDriverLocation, persistDriverLocation } from '../services/driverLocation';
 import { forgetOnlineDrivers } from '../services/onlineDrivers';
+import { transitionRide } from '../services/rideTransition';
 
 const acceptingRides = new Set<string>();
 import type { Ride, GeoPoint } from '../types';
@@ -287,50 +288,18 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
     case 'ride_arrived':
     case 'ride_started':
     case 'ride_completed': {
-      const rideId = String(msg.rideId ?? '');
-      const ride = await store().getRide(rideId);
-      if (!ride) {
-        send(ws, { type: 'error', message: 'Ride not found', code: 'NO_RIDE' });
-        return;
-      }
-      if (ride.driverId !== uid) {
-        send(ws, { type: 'error', message: 'Not your ride', code: 'FORBIDDEN' });
-        return;
-      }
+      // Kept for clients still on an older bundle. New ones use
+      // POST /api/rides/:id/status, which answers — a socket write cannot,
+      // and a driver whose frame vanished into a half-open connection used to
+      // walk away believing the ride had moved on when the server never heard.
       const statusMap = {
         ride_arrived: 'arrived',
         ride_started: 'in_progress',
         ride_completed: 'completed',
       } as const;
-      const validTransitions: Record<string, string[]> = {
-        assigned: ['arrived'],
-        arrived: ['in_progress'],
-        in_progress: ['completed'],
-      };
-      const status = statusMap[type];
-      const allowed = validTransitions[ride.status] ?? [];
-      if (!allowed.includes(status)) {
-        send(ws, { type: 'error', message: `Cannot transition from ${ride.status} to ${status}`, code: 'INVALID_TRANSITION' });
-        return;
-      }
-      // Stamp arrival time so cancellation can grant the free grace window.
-      const updated = await store().updateRide(rideId, {
-        status,
-        ...(status === 'arrived' ? { arrivedAt: nowIso() } : {}),
-      });
-      notifyRideParties(updated ?? ride, {
-        type: 'ride_status_update',
-        rideId,
-        status,
-        data: {},
-      });
-      const notif: Record<string, [string, string]> = {
-        arrived: ['Driver arrived', 'Your driver is waiting at the pickup point.'],
-        in_progress: ['Ride started', 'Enjoy your trip!'],
-        completed: ['Ride complete', 'Please rate your driver.'],
-      };
-      if (notif[status]) {
-        await pushToUser(ride.passengerId, notif[status][0], notif[status][1], { rideId, status });
+      const result = await transitionRide(uid, String(msg.rideId ?? ''), statusMap[type]);
+      if (!result.ok) {
+        send(ws, { type: 'error', message: result.message, code: result.code });
       }
       return;
     }
