@@ -16,6 +16,7 @@ import {
 import { sendToUser, broadcast, broadcastToDriversOfType } from '../websocket/broadcast';
 import { initialOffered } from '../services/scheduler';
 import { hasLiveRide } from '../services/activeRide';
+import { findUnpaidFare } from '../services/unpaidFare';
 import { findOutstandingFee } from '../services/cancellationFee';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty, Role } from '../types';
 
@@ -54,6 +55,22 @@ export async function createRide(req: Request, res: Response): Promise<void> {
       code: 'CANCELLATION_FEE_DUE',
       rideId: owed.id,
       amount: owed.cancellationFee,
+    });
+    return;
+  }
+
+  // The same leverage, for the fare itself. A ride that finished without the
+  // passenger ever approving the payment leaves the driver out of pocket — the
+  // driver's share is paid out of a fare that never arrived — and Pi gives us
+  // no card to fall back on. Without this the passenger simply ordered again,
+  // which is exactly what a road test turned up.
+  const unpaid = await findUnpaidFare(req.user!.uid);
+  if (unpaid) {
+    res.status(409).json({
+      error: 'A previous ride has not been paid for',
+      code: 'UNPAID_RIDE',
+      rideId: unpaid.id,
+      amount: unpaid.fare,
     });
     return;
   }
