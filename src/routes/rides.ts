@@ -19,6 +19,7 @@ import {
   getHeatmap,
   listOpenRides,
   setRideStatus,
+  acceptRideRequest,
 } from '../controllers/rideController';
 
 const router = Router();
@@ -89,6 +90,7 @@ router.get('/heatmap', asyncHandler(getHeatmap));
 router.get('/:id', asyncHandler(getRide));
 router.patch('/:id', validate(updateSchema), asyncHandler(updateRide));
 router.post('/:id/cancel', validate(cancelSchema), asyncHandler(cancelRide));
+router.post('/:id/accept', requireRole('driver'), asyncHandler(acceptRideRequest));
 router.post(
   '/:id/status',
   requireRole('driver'),

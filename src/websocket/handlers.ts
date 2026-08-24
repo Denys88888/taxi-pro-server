@@ -7,13 +7,13 @@ import { getRouteInfo } from '../services/routingService';
 import { getSurge } from '../services/surgeService';
 import { genId, nowIso, haversineKm, isApprovedDriver } from '../utils/helpers';
 import { MAX_MESSAGE_LENGTH } from '../config/constants';
-import { send, sendToUser, broadcast, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
+import { send, sendToUser, broadcastToDriversOfType, type AuthedSocket } from './broadcast';
 import { initialOffered } from '../services/scheduler';
 import { forgetDriverLocation, persistDriverLocation } from '../services/driverLocation';
 import { forgetOnlineDrivers } from '../services/onlineDrivers';
 import { transitionRide } from '../services/rideTransition';
+import { acceptRide } from '../services/rideAccept';
 
-const acceptingRides = new Set<string>();
 import type { Ride, GeoPoint } from '../types';
 
 const geo = z.object({
@@ -211,71 +211,23 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
     }
 
     case 'ride_accept': {
+      // Kept for clients still on an older bundle. New ones use
+      // POST /api/rides/:id/accept, which answers — a socket write cannot, and
+      // a driver whose accept vanished into a half-open connection used to
+      // drive off believing the ride was theirs while the server kept offering
+      // it to everyone else.
       const rideId = String(msg.rideId ?? '');
-      if (acceptingRides.has(rideId)) {
-        send(ws, { type: 'error', message: 'Ride no longer available', code: 'TAKEN' });
+      const result = await acceptRide(uid, rideId);
+      if (!result.ok) {
+        send(ws, { type: 'error', message: result.message, code: result.code });
         return;
       }
-      acceptingRides.add(rideId);
-      try {
-      const driver = await store().getUser(uid);
-      if (!driver || driver.role !== 'driver' || !driver.driverInfo) {
-        send(ws, { type: 'error', message: 'Not a registered driver', code: 'NOT_DRIVER' });
-        return;
-      }
-      if (driver.isBlocked) {
-        send(ws, { type: 'error', message: 'Account blocked', code: 'BLOCKED' });
-        return;
-      }
-      if (!isApprovedDriver(driver.driverInfo)) {
-        send(ws, { type: 'error', message: 'Driver not verified', code: 'NOT_VERIFIED' });
-        return;
-      }
-      // Off-shift drivers must not take rides. Nothing clears isOnline during a
-      // ride, so this only ever catches a driver who really did go offline (or
-      // was swept offline for GPS silence) and still had a stale offer on screen.
-      if (!driver.driverInfo.isOnline) {
-        send(ws, { type: 'error', message: 'You are offline', code: 'OFFLINE' });
-        return;
-      }
-      const ride = await store().getRide(rideId);
-      if (!ride) {
-        send(ws, { type: 'error', message: 'Ride not found', code: 'NO_RIDE' });
-        return;
-      }
-      if (ride.status !== 'searching') {
-        send(ws, { type: 'error', message: 'Ride no longer available', code: 'TAKEN' });
-        return;
-      }
-      const updated = await store().updateRide(rideId, { status: 'assigned', driverId: uid });
-      const driverInfo = {
-        uid,
-        name: driver?.name,
-        phone: driver?.phone,
-        rating: driver?.rating,
-        vehicleType: driver?.driverInfo?.vehicleType,
-        brand: driver?.driverInfo?.brand,
-        model: driver?.driverInfo?.model,
-        color: driver?.driverInfo?.color,
-        number: driver?.driverInfo?.number,
-        vehiclePhoto: driver?.driverInfo?.vehiclePhoto,
-      };
-      sendToUser(ride.passengerId, {
-        type: 'ride_assigned',
+      send(ws, {
+        type: 'ride_status_update',
         rideId,
-        driverId: uid,
-        driverInfo,
+        status: 'assigned',
+        data: { ride: result.ride },
       });
-      // Tell other drivers it's gone.
-      broadcast({ type: 'ride_status_update', rideId, status: 'assigned', data: {} }, 'driver');
-      send(ws, { type: 'ride_status_update', rideId, status: 'assigned', data: { ride: updated } });
-      await pushToUser(ride.passengerId, 'Driver found!', `${driver?.name ?? 'Your driver'} is on the way.`, {
-        type: 'ride_assigned',
-        rideId,
-      });
-      } finally {
-        acceptingRides.delete(rideId);
-      }
       return;
     }
 

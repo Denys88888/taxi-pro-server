@@ -18,6 +18,7 @@ import { initialOffered } from '../services/scheduler';
 import { hasLiveRide } from '../services/activeRide';
 import { findUnpaidFare } from '../services/unpaidFare';
 import { transitionRide, type DriverStatus } from '../services/rideTransition';
+import { acceptRide } from '../services/rideAccept';
 import { findOutstandingFee } from '../services/cancellationFee';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty, Role } from '../types';
 
@@ -620,4 +621,32 @@ export async function setRideStatus(req: Request, res: Response): Promise<void> 
   }
   // The ride itself, so the app follows the server rather than its own guess.
   res.json(result.ride);
+}
+
+// POST /api/rides/:id/accept — a driver takes an open ride.
+//
+// Same reason as /status: this was a WebSocket frame, and a socket write tells
+// you nothing. A driver on a half-open connection saw their own screen switch
+// to the ride and set off, while the server had never heard and went on
+// offering the same passenger to everyone else.
+//
+// Answers with the ride and the driver card the passenger will see. Re-sending
+// an accept that already succeeded is safe (see acceptRide) — anything else
+// would tell a driver whose request timed out that the ride was taken, by
+// themselves.
+export async function acceptRideRequest(req: Request, res: Response): Promise<void> {
+  const result = await acceptRide(req.user!.uid, req.params.id);
+  if (!result.ok) {
+    // TAKEN is the ordinary outcome of two drivers wanting the same ride, not
+    // a fault: 409, so the app can say "someone got there first" plainly.
+    const code =
+      result.code === 'NO_RIDE'
+        ? 404
+        : result.code === 'TAKEN'
+          ? 409
+          : 403;
+    res.status(code).json({ error: result.message, code: result.code });
+    return;
+  }
+  res.json({ ride: result.ride, driverInfo: result.driverInfo });
 }
