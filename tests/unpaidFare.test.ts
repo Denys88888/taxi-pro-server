@@ -110,4 +110,33 @@ describe('ordering after a ride that was never paid for', () => {
 
     expect((await order(uid)).status).toBe(201);
   });
+
+  // The bug the owner hit: they paid the ride the refusal named, ordered again,
+  // and were refused over the one behind it. A backlog like that cannot form in
+  // normal running — an unpaid ride blocks the next order, so there is never a
+  // second one to go unpaid — it only exists from before this rule was added.
+  // Paying the last ride has to be enough to get moving again.
+  it('lets the passenger order once their LAST ride is paid, whatever is behind it', async () => {
+    const uid = 'p_backlog';
+    // Three old test rides nobody ever paid for, then a recent one that is.
+    await finishedRide(uid, { paymentStatus: undefined });
+    await finishedRide(uid, { paymentStatus: undefined });
+    await finishedRide(uid, { paymentStatus: 'cancelled' });
+    await new Promise((r) => setTimeout(r, 5)); // ordering is by createdAt
+    await finishedRide(uid, { paymentStatus: 'completed' });
+
+    expect((await order(uid)).status).toBe(201);
+  });
+
+  // …and the other way round: an old paid ride does not excuse the last one.
+  it('still refuses when the last ride is the unpaid one', async () => {
+    const uid = 'p_last_unpaid';
+    await finishedRide(uid, { paymentStatus: 'completed' });
+    await new Promise((r) => setTimeout(r, 5));
+    const owed = await finishedRide(uid, { paymentStatus: undefined });
+
+    const res = await order(uid);
+    expect(res.status).toBe(409);
+    expect(res.body.rideId).toBe(owed.id);
+  });
 });
