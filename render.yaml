@@ -26,6 +26,13 @@ services:
         sync: false
       - key: CORS_ORIGINS
         value: https://denys88888.github.io
+      # Not a secret — a DSN is a write-only ingest endpoint, the same shape
+      # of thing a public API key is, and the frontend's own DSN ships inside
+      # the JS bundle every visitor downloads. Committed as a plain value like
+      # PI_SANDBOX above rather than sync: false, which is for things that
+      # actually need to stay off GitHub.
+      - key: SENTRY_DSN
+        value: https://db84f22e5838deb30c569dda6e3dc890@o4511702917644288.ingest.de.sentry.io/4511978289365072
       # SQLite DB path.
       #
       # WARNING: on the free plan the container filesystem is EPHEMERAL. With no
