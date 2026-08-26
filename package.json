@@ -10,7 +10,8 @@
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest --runInBand",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "migrate:sqlite": "node dist/scripts/migrateFirestoreToSqlite.js"
   },
   "engines": {
     "node": ">=20.0.0"

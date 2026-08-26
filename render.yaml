@@ -33,21 +33,28 @@ services:
       # actually need to stay off GitHub.
       - key: SENTRY_DSN
         value: https://db84f22e5838deb30c569dda6e3dc890@o4511702917644288.ingest.de.sentry.io/4511978289365072
-      # SQLite DB path.
-      #
-      # WARNING: on the free plan the container filesystem is EPHEMERAL. With no
-      # disk mounted at /app/data, every deploy and every restart destroys all
-      # rides, payments and driver-payout records. For a payment app that means
-      # unpaid payouts become unrecoverable.
-      #
-      # Pick one of:
-      #   a) Firestore (free tier, recommended) — set FIREBASE_PROJECT_ID,
-      #      FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY above. The server
-      #      prefers Firestore over SQLite automatically when they are present.
-      #   b) A Render disk (paid plan) — uncomment the `disk` block below.
+      # SQLite DB path, on the disk mounted below.
       - key: SQLITE_PATH
         value: /app/data/taxipro.db
-    # disk:
-    #   name: taxipro-data
-    #   mountPath: /app/data
-    #   sizeGB: 1
+    # Firestore's free 50k-reads/day quota capped this app at roughly 15
+    # concurrent drivers before the database itself started refusing requests
+    # (task #28's crash loop). The Starter plan above is what makes a disk
+    # available at all; before that, mounting one wasn't an option and
+    # Firestore was the only durable choice despite the ceiling.
+    #
+    # initStore() (src/models/index.ts) still prefers Firestore whenever
+    # FIREBASE_* is set, so this disk taking effect is a two-step, reversible
+    # switch, not something this file does by itself:
+    #   1. Run `npm run migrate:sqlite` once (Render Shell, so it has the
+    #      real FIREBASE_* creds already in the environment) to copy every
+    #      Firestore document here. Read-only against Firestore — nothing
+    #      there is touched, let alone deleted.
+    #   2. Only once that has been checked, clear FIREBASE_PROJECT_ID /
+    #      FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY in the Render
+    #      dashboard's Environment tab. initStore() then falls through to
+    #      this disk. Re-adding those three values is an instant revert —
+    #      Firestore was never written to, so nothing to undo there either.
+    disk:
+      name: taxipro-data
+      mountPath: /app/data
+      sizeGB: 1
