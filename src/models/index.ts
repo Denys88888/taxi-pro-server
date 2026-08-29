@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import { initFirebase, isFirebaseEnabled } from '../config/firebase';
 import { env } from '../config/env';
@@ -6,6 +7,20 @@ import { setStore } from './store';
 import { MemoryStore } from './memory';
 import { FirestoreStore } from './firestore';
 import { SqliteStore } from './sqlite';
+
+// A mounted Render disk is its own filesystem, so the db directory's device id
+// differs from the container root's. Ephemeral SQLite (no disk attached) lives
+// on the same device as everything else that gets wiped on deploy — that's the
+// one case the warning below exists to catch. Defaults to "not persistent" on
+// any stat failure, so an unexpected error still surfaces the warning rather
+// than silently hiding it.
+function isPersistentDisk(dbPath: string): boolean {
+  try {
+    return fs.statSync(path.dirname(dbPath)).dev !== fs.statSync('/').dev;
+  } catch {
+    return false;
+  }
+}
 
 // Choose the persistence backend at startup:
 //   1. Firestore  — when Firebase env vars are configured (optional cloud DB)
@@ -40,7 +55,7 @@ export function initStore(): boolean {
     // mounted disk at the SQLITE_PATH directory, every deploy and every
     // restart wipes rides, payments and payout statuses. Configure Firestore
     // (free tier, see FIREBASE_* env vars) or attach a Render disk.
-    if (env.isProd) {
+    if (env.isProd && !isPersistentDisk(dbPath)) {
       logger.error(
         '[Store] SQLite in production — data is LOST on every deploy/restart unless a persistent disk is mounted at this path. Configure FIREBASE_* for Firestore, or attach a Render disk.',
         { path: dbPath }
