@@ -18,6 +18,7 @@ import adminRoutes from './routes/admin';
 import pushRoutes from './routes/push';
 import userRoutes from './routes/users';
 import reportRoutes from './routes/reports';
+import callRoutes from './routes/calls';
 import { store } from './models';
 
 // Build the Express application. Exported separately from the HTTP/WS server so
@@ -203,6 +204,7 @@ export function createApp(): Express {
   app.use('/api/admin', adminRoutes);
   app.use('/api/reports', reportRoutes);
   app.use('/api/push-token', pushRoutes);
+  app.use('/api/calls', callRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

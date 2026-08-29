@@ -34,6 +34,10 @@ const schema = z.object({
   ADMIN_UIDS: z.string().optional(),
   // Path to the SQLite database file (primary durable store). ':memory:' for tests.
   SQLITE_PATH: z.string().optional(),
+  // Metered.ca account secret — mints short-lived TURN relay credentials for
+  // in-app calls. Optional: without it, calls fall back to STUN-only, which
+  // fails to connect across some carrier NATs (see turnCredentials.ts).
+  METERED_SECRET_KEY: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -73,4 +77,7 @@ if (!env.PI_API_KEY) {
 }
 if (!env.PI_WALLET_SEED) {
   logger.warn('PI_WALLET_SEED is not set — driver payouts (A2U) will be skipped; funds stay in the app wallet.');
+}
+if (!env.METERED_SECRET_KEY) {
+  logger.warn('METERED_SECRET_KEY is not set — in-app calls will be STUN-only and may fail to connect across some carrier networks.');
 }

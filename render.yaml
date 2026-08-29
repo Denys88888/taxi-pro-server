@@ -24,6 +24,12 @@ services:
         sync: false
       - key: FIREBASE_PRIVATE_KEY
         sync: false
+      # Metered.ca account secret, mints short-lived TURN relay credentials for
+      # in-app calls (task #38 — calls failing "no connection" across some
+      # carrier networks, which STUN alone can't cross). Free plan, 500MB/mo,
+      # no card on file. Without this set, calls just stay STUN-only.
+      - key: METERED_SECRET_KEY
+        sync: false
       - key: CORS_ORIGINS
         value: https://denys88888.github.io
       # Not a secret — a DSN is a write-only ingest endpoint, the same shape
