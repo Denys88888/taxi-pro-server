@@ -56,7 +56,13 @@ export function createApp(): Express {
   // Swagger UI at /api/docs — standalone HTML + CDN Swagger UI (no npm package).
   // Serves the spec as JSON at /api/docs/spec.json and a plain HTML page that
   // loads Swagger UI from unpkg. No inline scripts = no CSP issues.
-  try {
+  //
+  // Not in production. This block used to mount unconditionally, which handed
+  // anyone who asked the complete map of a payments API — every route, every
+  // parameter, every schema — with no login. That is not a hole by itself, it
+  // is a head start for finding one. The spec is for developing against a local
+  // or preview instance; in production, read the YAML in the repo instead.
+  if (!env.isProd) try {
     const specPath = path.resolve(process.cwd(), 'openapi.yaml');
     const specJson = JSON.stringify(yaml.load(fs.readFileSync(specPath, 'utf8')));
 
