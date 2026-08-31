@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { verifyToken } from '../utils/jwt';
 import { store } from '../models';
 import { TtlCache } from '../utils/ttlCache';
-import type { JwtPayload } from '../types';
+import type { JwtPayload, Role } from '../types';
 
 // Augment Express Request with the authenticated user.
 declare module 'express-serve-static-core' {
@@ -26,6 +26,13 @@ const BLOCK_CHECK_TTL_MS = 60_000;
 interface BlockState {
   isBlocked: boolean;
   blockReason?: string;
+  // The role as *stored*, which is not always the role in the token. A JWT is
+  // good for 24h, so demoting an admin left them fully admin on every HTTP
+  // route until their token happened to expire — blocking them worked, taking
+  // the role away did not. The socket path already preferred the stored role
+  // (websocket/server.ts); this closes the same gap for HTTP. It costs nothing:
+  // the user document is being read here anyway.
+  role?: Role;
 }
 
 const blockChecks = new TtlCache<BlockState>(BLOCK_CHECK_TTL_MS);
@@ -56,11 +63,23 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   try {
     const state = await blockChecks.get(payload.uid, async () => {
       const user = await store().getUser(payload.uid);
-      return { isBlocked: !!user?.isBlocked, blockReason: user?.blockReason };
+      return { isBlocked: !!user?.isBlocked, blockReason: user?.blockReason, role: user?.role };
     });
     if (state.isBlocked) {
       res.status(403).json({ error: 'Account blocked', reason: state.blockReason, code: 'BLOCKED' });
       return;
+    }
+    // The stored role wins over the token's claim, in both directions — the
+    // same rule websocket/server.ts already applies. Downwards it is the point
+    // of this: a demoted admin must stop being one now, not in 24 hours.
+    // Upwards it is what makes a driver approved *after* they logged in work
+    // without a re-login, which is the exact case that comment cites.
+    //
+    // This is only ever a promotion the store itself already granted, and the
+    // one role that matters can be granted by nothing but ADMIN_UIDS or another
+    // admin (authController + adminController are the only writers).
+    if (state.role && state.role !== payload.role) {
+      payload.role = state.role;
     }
   } catch {
     /* store unavailable — fall through on the strength of the valid token */

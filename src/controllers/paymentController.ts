@@ -239,7 +239,11 @@ export async function cancelUnknownPiPayment(req: Request, res: Response): Promi
       res.status(404).json({ error: 'Pi payment not found' });
       return;
     }
-    if (data.user_uid && data.user_uid !== req.user!.uid) {
+    // `!data.user_uid ||` — not `data.user_uid &&`. piFetch returns an empty
+    // object when a 200 body fails to parse as JSON, so the old form let a
+    // reply with no owner in it skip the check entirely and cancel a payment
+    // belonging to someone else. Absent ownership is not proof of ownership.
+    if (!data.user_uid || data.user_uid !== req.user!.uid) {
       logger.warn('[Payment] blocked cross-user cancel attempt', {
         piPaymentId, owner: data.user_uid, caller: req.user!.uid,
       });

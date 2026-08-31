@@ -11,6 +11,13 @@ export const LIVE_RIDE_STATUSES: RideStatus[] = [
   'in_progress',
 ];
 
+// Statuses during which the two parties may reach each other by voice. Narrower
+// than LIVE_RIDE_STATUSES: 'searching' has no driver yet, so there is nobody to
+// call. Shared by the WebSocket signaling path and the TURN-credential endpoint
+// for the same reason as above — if they disagreed, one would hand out a relay
+// credential for a call the other refuses to connect.
+export const CALLABLE_RIDE_STATUSES: RideStatus[] = ['assigned', 'arrived', 'in_progress'];
+
 // Whether this user already has a ride under way. The create-ride gate and the
 // dispatcher both ask through here, so they cannot end up disagreeing about
 // what "already riding" means — one refusing an order the other would allow.

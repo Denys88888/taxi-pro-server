@@ -13,6 +13,7 @@ import { forgetDriverLocation, persistDriverLocation } from '../services/driverL
 import { forgetOnlineDrivers } from '../services/onlineDrivers';
 import { transitionRide } from '../services/rideTransition';
 import { acceptRide } from '../services/rideAccept';
+import { CALLABLE_RIDE_STATUSES } from '../services/activeRide';
 
 import type { Ride, GeoPoint } from '../types';
 
@@ -352,7 +353,7 @@ export async function handleMessage(ws: AuthedSocket, msg: Record<string, unknow
       }
       // A call only makes sense while the ride is live. Starting one on a
       // finished ride would let the parties reach each other indefinitely.
-      if (type === 'call_offer' && !['assigned', 'arrived', 'in_progress'].includes(ride.status)) {
+      if (type === 'call_offer' && !CALLABLE_RIDE_STATUSES.includes(ride.status)) {
         send(ws, { type: 'call_end', rideId, reason: 'ride_inactive' });
         return;
       }

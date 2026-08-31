@@ -263,10 +263,12 @@ export async function updateUserBlock(req: Request, res: Response): Promise<void
     res.status(404).json({ error: 'User not found' });
     return;
   }
-  if (isBlocked !== undefined) {
+  if (isBlocked !== undefined || role !== undefined) {
     // requireAuth caches this flag for a minute to keep a per-request read off
     // Firestore; drop the entry so the ban (or the pardon) lands on the very
-    // next request instead of whenever that minute happens to run out.
+    // next request instead of whenever that minute happens to run out. The same
+    // entry now carries the stored role, so a demotion has to drop it too —
+    // otherwise taking admin away would sit unapplied for up to that minute.
     forgetBlockCheck(req.params.id);
   }
   if (isBlocked) {
