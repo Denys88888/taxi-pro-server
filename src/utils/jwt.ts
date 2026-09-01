@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { randomBytes } from 'crypto';
 import { env } from '../config/env';
 import { JWT_EXPIRY, SHARE_TOKEN_EXPIRY } from '../config/constants';
 import type { JwtPayload } from '../types';
@@ -24,8 +25,14 @@ export function verifyToken(token?: string): JwtPayload | null {
 }
 
 // Short-lived, read-only token for public ride sharing.
+//
+// `jti` is what makes re-sharing actually revoke the old link. The ride stores
+// exactly one share token and getSharedRide refuses anything that is not it —
+// but `iat` only has second resolution, so without a random claim two shares
+// issued in the same second produced byte-identical tokens and the link the
+// passenger meant to kill stayed alive.
 export function signShareToken(rideId: string): string {
-  return jwt.sign({ rideId, readonly: true }, env.JWT_SECRET, {
+  return jwt.sign({ rideId, readonly: true, jti: randomBytes(8).toString('hex') }, env.JWT_SECRET, {
     algorithm: 'HS256',
     expiresIn: SHARE_TOKEN_EXPIRY,
   });

@@ -13,6 +13,7 @@ import {
   cancelRide,
   getOutstandingFee,
   shareRide,
+  getSharedRide,
   submitOffer,
   acceptOffer,
   getSurgeInfo,
@@ -76,6 +77,12 @@ const updateSchema = z
 const cancelSchema = z.object({
   reason: z.string().min(1).max(300),
 });
+
+// Above requireAuth on purpose: the whole point of a share link is that the
+// person following it does not have an account here. The token in the path is
+// the credential, and getSharedRide checks it against the one stored on the
+// ride so an old link stops working.
+router.get('/shared/:token', asyncHandler(getSharedRide));
 
 router.use(requireAuth);
 

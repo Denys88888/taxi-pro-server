@@ -5,7 +5,7 @@ import { getRouteInfo } from '../services/routingService';
 import { getSurge } from '../services/surgeService';
 import { releaseHeldPayment } from './paymentController';
 import { genId, nowIso, round, isApprovedDriver } from '../utils/helpers';
-import { signShareToken } from '../utils/jwt';
+import { signShareToken, verifyShareToken } from '../utils/jwt';
 import { TtlCache } from '../utils/ttlCache';
 import {
   LATE_CANCELLATION_FEE_PERCENT,
@@ -594,6 +594,58 @@ export async function shareRide(req: Request, res: Response): Promise<void> {
   const shareToken = signShareToken(ride.id);
   await store().updateRide(ride.id, { shareToken });
   res.json({ shareToken });
+}
+
+// GET /api/rides/shared/:token — the other end of the share link. No auth: the
+// point is that someone who is not a user of this app can watch the trip, which
+// is what makes it a safety feature rather than a novelty.
+//
+// Everything here is a deliberate subset. The link travels through WhatsApp and
+// gets forwarded, so it must never carry anything the passenger did not mean to
+// hand out: no fare, no payment or payout state, no passenger identity, and
+// neither party's phone number. What is left is what someone worried about this
+// trip actually needs — which car, where it is, and whether it arrived.
+export async function getSharedRide(req: Request, res: Response): Promise<void> {
+  const claim = verifyShareToken(req.params.token);
+  if (!claim) {
+    res.status(404).json({ error: 'This link is no longer valid', code: 'SHARE_EXPIRED' });
+    return;
+  }
+  const ride = await store().getRide(claim.rideId);
+  // Compare against the token stored on the ride, not just the signature. Every
+  // tap of "share" mints a new one, so this is what makes the previous link
+  // stop working — the passenger's only way to take a share back.
+  if (!ride || ride.shareToken !== req.params.token) {
+    res.status(404).json({ error: 'This link is no longer valid', code: 'SHARE_EXPIRED' });
+    return;
+  }
+
+  const finished = ride.status === 'completed' || ride.status === 'cancelled';
+  const driver = ride.driverId ? await store().getUser(ride.driverId) : null;
+
+  res.json({
+    status: ride.status,
+    finished,
+    pickup: ride.pickup,
+    destination: ride.destination,
+    distanceKm: ride.distanceKm,
+    estimatedDurationMin: ride.estimatedDurationMin,
+    driver: driver
+      ? {
+          name: driver.name,
+          rating: driver.rating,
+          brand: driver.driverInfo?.brand,
+          model: driver.driverInfo?.model,
+          color: driver.driverInfo?.color,
+          number: driver.driverInfo?.number,
+        }
+      : null,
+    // Stops the moment the trip does. A finished ride's link would otherwise
+    // keep broadcasting where that driver is for the rest of the token's life,
+    // which has nothing to do with the trip that was shared.
+    driverLocation: finished ? null : (driver?.driverInfo?.lastLocation ?? null),
+    updatedAt: ride.updatedAt,
+  });
 }
 
 // POST /api/rides/:id/status — the driver moves their ride along.
