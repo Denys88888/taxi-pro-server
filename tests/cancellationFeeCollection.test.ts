@@ -23,6 +23,17 @@ const app = createApp();
 const piGet = getPiPayment as jest.MockedFunction<typeof getPiPayment>;
 const piCancel = cancelPayment as jest.MockedFunction<typeof cancelPayment>;
 
+// What Pi actually answers for a payment this app opened: an owner, and the
+// local payment id createPayment put in the metadata. approve/complete/cancel
+// now read both to prove the caller's piPaymentId belongs to the record they
+// named, so a bare `data: {}` no longer stands in for a real Pi payment.
+const piRecord = (paymentId: string, uid: string): never =>
+  ({
+    ok: true,
+    status: 200,
+    data: { user_uid: uid, metadata: { paymentId } },
+  }) as never;
+
 beforeEach(() => {
   piGet.mockClear();
   piCancel.mockClear();
@@ -179,6 +190,7 @@ describe('paying the fee', () => {
       .post('/api/payments')
       .set(authFor('feepax11'))
       .send({ rideId: id, type: 'fee' });
+    piGet.mockResolvedValue(piRecord(created.body.paymentId, 'feepax11'));
     await request(app)
       .post(`/api/payments/${created.body.paymentId}/approve`)
       .set(authFor('feepax11'))
@@ -195,6 +207,7 @@ describe('paying the fee', () => {
       .post('/api/payments')
       .set(authFor('feepax12'))
       .send({ rideId: id, type: 'fee' });
+    piGet.mockResolvedValue(piRecord(created.body.paymentId, 'feepax12'));
     const done = await request(app)
       .post(`/api/payments/${created.body.paymentId}/complete`)
       .set(authFor('feepax12'))
@@ -239,6 +252,7 @@ describe('retrying a fee payment that was left half-finished', () => {
       .post('/api/payments')
       .set(authFor(pax))
       .send({ rideId: id, type: 'fee' });
+    piGet.mockResolvedValue(piRecord(created.body.paymentId, pax));
     await request(app)
       .post(`/api/payments/${created.body.paymentId}/approve`)
       .set(authFor(pax))

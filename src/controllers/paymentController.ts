@@ -6,6 +6,7 @@ import {
   cancelPayment as piCancel,
   getPiPayment,
   payoutToUser,
+  type PiApiResult,
 } from '../services/piService';
 import { env } from '../config/env';
 import { sendToUser } from '../websocket/broadcast';
@@ -212,50 +213,168 @@ function logPiOp(
   });
 }
 
-// Observation only — this decides nothing and blocks nothing.
+// The fields of a Pi payment record this file relies on. Pi returns more; these
+// are the three that answer "is this Pi payment really the one this record was
+// created for, and does it belong to the caller?".
 //
-// The open question it exists to answer: `createPayment` puts our own payment id
-// into the metadata it hands to Pi.createPayment, but nothing in this codebase
-// has ever read that metadata back off a GET /v2/payments/{id}. Whether Pi
-// echoes it there is an assumption, and binding a payment to its Pi counterpart
-// depends on it entirely — enforcing a field Pi does not return would refuse
-// every payment in production. So look first, enforce later.
+// That Pi echoes `metadata` back on GET /v2/payments/{id} was an assumption when
+// this check was first written, and enforcing a field Pi does not return would
+// have refused every payment in production. It was shipped as an observation
+// first and confirmed against a real mainnet payment on 8 Sep 2026: the record
+// came back carrying user_uid and metadata.paymentId equal to our own id.
+interface PiPaymentRecord {
+  user_uid?: string;
+  metadata?: { paymentId?: string } | null;
+  transaction?: { txid?: string } | null;
+}
+
+type BindingResult =
+  | { ok: true; pi: PiPaymentRecord | null }
+  | { ok: false; status: number; error: string; reason: string };
+
+// Establish that `piPaymentId` — which arrives in the request body and is
+// therefore chosen by the client — really is the Pi payment this local record
+// was created for, and really belongs to the caller.
 //
-// Called as `void observePiBinding(...)`: the passenger must not wait on a
-// diagnostic, and a fire-and-forget promise that rejects takes the process down
-// with it (see the note in payoutDriver), so nothing in here may throw.
-function observePiBinding(payment: Payment, piPaymentId: string, uid: string): Promise<void> {
-  return getPiPayment<{
-    user_uid?: string;
-    metadata?: { paymentId?: string } | null;
-    transaction?: { txid?: string } | null;
-  }>(piPaymentId)
-    .then(({ ok, status, data }) => {
-      logger.info('[Payment] pi payment observed', {
-        paymentId: payment.id,
-        piPaymentId,
-        uid,
-        piStatus: status,
-        ok,
-        // What came back, without assuming any of it exists.
-        fields: Object.keys(data ?? {}),
-        hasUserUid: !!data?.user_uid,
-        ownerMatchesCaller: data?.user_uid === uid,
-        hasMetadata: !!data?.metadata,
-        metadataPaymentId: data?.metadata?.paymentId ?? null,
-        // The verdict a future binding check would have reached. Logged, not acted on.
-        wouldBindOk: data?.user_uid === uid && data?.metadata?.paymentId === payment.id,
-        hasTransaction: !!data?.transaction,
-      });
-    })
-    .catch((err: unknown) => {
-      logger.warn('[Payment] pi payment observation failed', {
+// Ownership of the *ride* is already checked by every caller, but that only
+// proves the caller may act on their own payment record; it says nothing about
+// which Pi payment they named alongside it. Without this the two identifiers
+// were independent: a caller could pair their own record with any Pi payment id
+// they knew and have the server approve, complete or cancel it on their behalf.
+//
+// Two regimes, deliberately different:
+//
+//  * Already bound (we stored a piPaymentId when this record was first linked).
+//    Identity was settled then, so the only question is whether the client is
+//    naming the same payment — a different id is never a legitimate retry. Pi
+//    is still consulted, but a Pi that cannot be reached must not strand a real
+//    payment mid-flight, so an unusable answer falls through on the strength of
+//    the stored id. `piApprove`/`piComplete`/`piCancel` would fail anyway if the
+//    payment did not exist, and that failure is already recorded as 'failed'.
+//
+//  * First binding (no stored id yet). Here Pi's answer *is* the identity, so an
+//    unusable answer must deny rather than proceed. `!x ||` throughout, never
+//    `x &&`: an absent field is not proof — the same short-circuit that made
+//    cancelUnknownPiPayment cancel other people's payments (see the note there).
+async function assertPiPaymentBinding(
+  payment: Payment,
+  piPaymentId: string,
+  uid: string
+): Promise<BindingResult> {
+  const bound = payment.piPaymentId;
+  if (bound && bound !== piPaymentId) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'Payment id does not match this payment',
+      reason: 'stored_pi_id_mismatch',
+    };
+  }
+
+  let pi: PiApiResult<PiPaymentRecord>;
+  try {
+    pi = await getPiPayment<PiPaymentRecord>(piPaymentId);
+  } catch (err) {
+    if (bound) {
+      logger.warn('[Payment] binding check unavailable, proceeding on stored id', {
         paymentId: payment.id,
         piPaymentId,
         uid,
         error: (err as Error).message,
       });
-    });
+      return { ok: true, pi: null };
+    }
+    return {
+      ok: false,
+      status: 502,
+      error: 'Could not verify payment ownership',
+      reason: 'pi_lookup_failed',
+    };
+  }
+
+  // What Pi actually said about this payment, recorded whichever way the check
+  // then goes. A refused approve used to log `ok: false` and nothing else, which
+  // is how a wrong-app 404 stayed unexplained through six retries.
+  logger.info('[Payment] pi payment observed', {
+    paymentId: payment.id,
+    piPaymentId,
+    uid,
+    piStatus: pi.status,
+    ok: pi.ok,
+    hasUserUid: !!pi.data?.user_uid,
+    ownerMatchesCaller: pi.data?.user_uid === uid,
+    hasMetadata: !!pi.data?.metadata,
+    metadataPaymentId: pi.data?.metadata?.paymentId ?? null,
+    hasTransaction: !!pi.data?.transaction,
+  });
+
+  if (!pi.ok) {
+    if (bound) {
+      logger.warn('[Payment] binding check inconclusive, proceeding on stored id', {
+        paymentId: payment.id,
+        piPaymentId,
+        uid,
+        piStatus: pi.status,
+      });
+      return { ok: true, pi: null };
+    }
+    return {
+      ok: false,
+      status: 404,
+      error: 'Pi payment not found',
+      reason: 'pi_payment_not_found',
+    };
+  }
+
+  // Checked in both regimes: this is what keeps one user off another user's
+  // Pi payment, and Pi returns it on every payment record.
+  if (!pi.data.user_uid || pi.data.user_uid !== uid) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Not your payment',
+      reason: 'pi_owner_mismatch',
+    };
+  }
+
+  // Only on a first binding. `createPayment` puts our id in the metadata it
+  // hands to Pi.createPayment, so this is what proves the Pi payment was opened
+  // for *this* record. Once bound, the stored-id equality above already proves
+  // the link, and demanding metadata again would strand any record linked
+  // before that field existed.
+  if (!bound) {
+    const metaPaymentId = pi.data.metadata?.paymentId;
+    if (!metaPaymentId || metaPaymentId !== payment.id) {
+      return {
+        ok: false,
+        status: 409,
+        error: 'Payment id does not match this payment',
+        reason: 'pi_metadata_mismatch',
+      };
+    }
+  }
+
+  return { ok: true, pi: pi.data };
+}
+
+// A binding refusal is a security event, not a routine 4xx: it means the caller
+// named a Pi payment that is not the one this record belongs to.
+function logBindingRefused(
+  operation: 'approve' | 'complete' | 'cancel',
+  payment: Payment,
+  piPaymentId: string,
+  uid: string,
+  refusal: { status: number; reason: string }
+): void {
+  logger.warn('[Payment] binding refused', {
+    operation,
+    paymentId: payment.id,
+    piPaymentId,
+    storedPiPaymentId: payment.piPaymentId,
+    uid,
+    reason: refusal.reason,
+    httpStatus: refusal.status,
+  });
 }
 
 // POST /api/payments/:id/cancel — cancel a Pi payment the passenger left
@@ -282,6 +401,15 @@ export async function cancelIncompletePayment(req: Request, res: Response): Prom
   // captured transfer, not an abandoned sheet.
   if (payment.status === 'completed') {
     res.status(409).json({ error: 'Payment already completed' });
+    return;
+  }
+  // The id being cancelled is the client's, so prove it is this record's Pi
+  // payment before asking Pi to cancel it — otherwise any passenger could
+  // cancel a stranger's in-flight payment through their own record.
+  const binding = await assertPiPaymentBinding(payment, piPaymentId, req.user!.uid);
+  if (!binding.ok) {
+    logBindingRefused('cancel', payment, piPaymentId, req.user!.uid, binding);
+    res.status(binding.status).json({ error: binding.error });
     return;
   }
   const result = await piCancel(piPaymentId);
@@ -358,9 +486,18 @@ export async function approvePayment(req: Request, res: Response): Promise<void>
     res.status(200).json({ success: true, status: 'already_approved' });
     return;
   }
-  // Diagnostic only, and deliberately not awaited: find out what Pi actually
-  // returns for this payment while the approve itself proceeds exactly as before.
-  void observePiBinding(payment, piPaymentId, req.user!.uid);
+  // Everything above establishes that the caller owns the *record*. This
+  // establishes that the Pi payment they named alongside it is the one that
+  // record was created for — and, on the first binding, that Pi agrees it is
+  // theirs. Note this also closes the re-approve hole the guard above leaves
+  // open: reaching here with a different piPaymentId used to overwrite the
+  // stored binding, which is what recoverStalePayment later reads.
+  const binding = await assertPiPaymentBinding(payment, piPaymentId, req.user!.uid);
+  if (!binding.ok) {
+    logBindingRefused('approve', payment, piPaymentId, req.user!.uid, binding);
+    res.status(binding.status).json({ error: binding.error });
+    return;
+  }
   const result = await piApprove(piPaymentId);
   await store().updatePayment(payment.id, {
     piPaymentId,
@@ -397,6 +534,29 @@ export async function completePayment(req: Request, res: Response): Promise<void
   // tip would be credited to the driver more than once.
   if (payment.status === 'completed') {
     res.status(200).json({ success: true, txid: payment.txid ?? txid, status: 'already_completed' });
+    return;
+  }
+  // This is the call that moves money — it marks the fare paid and releases the
+  // driver's payout — so the same binding check the other two do runs here too.
+  const binding = await assertPiPaymentBinding(payment, piPaymentId, req.user!.uid);
+  if (!binding.ok) {
+    logBindingRefused('complete', payment, piPaymentId, req.user!.uid, binding);
+    res.status(binding.status).json({ error: binding.error });
+    return;
+  }
+  // The txid is the client's too, and it is what we write onto the ride and
+  // what every payout and recovery path reads afterwards. Pi is the authority:
+  // if it already has a transaction recorded for this payment, ours must be it.
+  // If it does not yet — the chain write can land before Pi has indexed it, as
+  // the first real mainnet completion showed — there is nothing to contradict,
+  // and piComplete below validates it anyway.
+  const piTxid = binding.pi?.transaction?.txid;
+  if (piTxid && piTxid !== txid) {
+    logBindingRefused('complete', payment, piPaymentId, req.user!.uid, {
+      status: 409,
+      reason: 'txid_mismatch',
+    });
+    res.status(409).json({ error: 'Transaction id does not match the Pi payment' });
     return;
   }
   const result = await piComplete(piPaymentId, txid);
