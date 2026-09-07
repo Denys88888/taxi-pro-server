@@ -188,6 +188,76 @@ export async function getPayment(req: Request, res: Response): Promise<void> {
   res.json(payment);
 }
 
+// One shape for every Pi call this file makes, so a failure can be traced from
+// the logs without re-deriving which record, which Pi payment and whose request
+// it belonged to. `piStatus` is the point of it: until now a refused approve
+// logged only `ok: false`, which says a payment failed but never why, and the
+// reason is the one thing an operator needs. Carries no key, no token and no
+// wallet data — these identifiers are already returned to the caller anyway.
+function logPiOp(
+  operation: 'approve' | 'complete' | 'cancel',
+  payment: Payment,
+  piPaymentId: string,
+  uid: string,
+  result: { ok: boolean; status: number }
+): void {
+  logger.info('[Payment] pi call', {
+    operation,
+    paymentId: payment.id,
+    piPaymentId,
+    uid,
+    type: payment.type ?? 'ride',
+    ok: result.ok,
+    piStatus: result.status,
+  });
+}
+
+// Observation only — this decides nothing and blocks nothing.
+//
+// The open question it exists to answer: `createPayment` puts our own payment id
+// into the metadata it hands to Pi.createPayment, but nothing in this codebase
+// has ever read that metadata back off a GET /v2/payments/{id}. Whether Pi
+// echoes it there is an assumption, and binding a payment to its Pi counterpart
+// depends on it entirely — enforcing a field Pi does not return would refuse
+// every payment in production. So look first, enforce later.
+//
+// Called as `void observePiBinding(...)`: the passenger must not wait on a
+// diagnostic, and a fire-and-forget promise that rejects takes the process down
+// with it (see the note in payoutDriver), so nothing in here may throw.
+function observePiBinding(payment: Payment, piPaymentId: string, uid: string): Promise<void> {
+  return getPiPayment<{
+    user_uid?: string;
+    metadata?: { paymentId?: string } | null;
+    transaction?: { txid?: string } | null;
+  }>(piPaymentId)
+    .then(({ ok, status, data }) => {
+      logger.info('[Payment] pi payment observed', {
+        paymentId: payment.id,
+        piPaymentId,
+        uid,
+        piStatus: status,
+        ok,
+        // What came back, without assuming any of it exists.
+        fields: Object.keys(data ?? {}),
+        hasUserUid: !!data?.user_uid,
+        ownerMatchesCaller: data?.user_uid === uid,
+        hasMetadata: !!data?.metadata,
+        metadataPaymentId: data?.metadata?.paymentId ?? null,
+        // The verdict a future binding check would have reached. Logged, not acted on.
+        wouldBindOk: data?.user_uid === uid && data?.metadata?.paymentId === payment.id,
+        hasTransaction: !!data?.transaction,
+      });
+    })
+    .catch((err: unknown) => {
+      logger.warn('[Payment] pi payment observation failed', {
+        paymentId: payment.id,
+        piPaymentId,
+        uid,
+        error: (err as Error).message,
+      });
+    });
+}
+
 // POST /api/payments/:id/cancel — cancel a Pi payment the passenger left
 // incomplete WITHOUT a txid (created/approved but never submitted to chain,
 // e.g. they backed out of the sheet). The Pi SDK surfaces such a payment via
@@ -220,7 +290,7 @@ export async function cancelIncompletePayment(req: Request, res: Response): Prom
   if (payment.type !== 'tip' && ride) {
     await store().updateRide(payment.rideId, { paymentStatus: 'pending' });
   }
-  logger.info('[Payment] cancelled incomplete', { paymentId: payment.id, ok: result.ok });
+  logPiOp('cancel', payment, piPaymentId, req.user!.uid, result);
   res.status(result.ok ? 200 : 502).json({ success: result.ok, status: result.status });
 }
 
@@ -288,6 +358,9 @@ export async function approvePayment(req: Request, res: Response): Promise<void>
     res.status(200).json({ success: true, status: 'already_approved' });
     return;
   }
+  // Diagnostic only, and deliberately not awaited: find out what Pi actually
+  // returns for this payment while the approve itself proceeds exactly as before.
+  void observePiBinding(payment, piPaymentId, req.user!.uid);
   const result = await piApprove(piPaymentId);
   await store().updatePayment(payment.id, {
     piPaymentId,
@@ -300,7 +373,7 @@ export async function approvePayment(req: Request, res: Response): Promise<void>
   if (result.ok && (payment.type ?? 'ride') === 'ride') {
     await store().updateRide(payment.rideId, { paymentStatus: 'held' });
   }
-  logger.info('[Payment] approve', { paymentId: payment.id, type: payment.type, ok: result.ok });
+  logPiOp('approve', payment, piPaymentId, req.user!.uid, result);
   res.status(result.ok ? 200 : 502).json({ success: result.ok, status: result.status });
 }
 
@@ -367,7 +440,7 @@ export async function completePayment(req: Request, res: Response): Promise<void
       }
     }
   }
-  logger.info('[Payment] complete', { paymentId: payment.id, type: payment.type, ok: result.ok });
+  logPiOp('complete', payment, piPaymentId, req.user!.uid, result);
   res.status(result.ok ? 200 : 502).json({ success: result.ok, txid, status: result.status });
 }
 
