@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { store } from '../models';
 import { fetchTurnIceServers } from '../services/turnCredentials';
 import { CALLABLE_RIDE_STATUSES } from '../services/activeRide';
+import { logger } from '../utils/logger';
 import type { RideStatus } from '../types';
 
 // A fresh TURN credential per request — call setup is infrequent (once per
@@ -31,6 +32,18 @@ export async function getTurnCredentials(req: Request, res: Response): Promise<v
     res.status(409).json({ error: 'Ride is not in a callable state', code: 'RIDE_INACTIVE' });
     return;
   }
+  // Logged on the way out, success included. Until now this endpoint said
+  // nothing at all: a call that failed to connect left no trace of whether it
+  // had a relay to fail with, which is the difference between "Metered is
+  // down" and "the client gave up waiting" — and those want opposite fixes.
+  const startedAt = Date.now();
   const iceServers = (await fetchTurnIceServers()) ?? [];
+  logger.info('[turn] credentials served', {
+    rideId,
+    uid,
+    rideStatus: ride.status,
+    count: iceServers.length,
+    tookMs: Date.now() - startedAt,
+  });
   res.json({ iceServers });
 }
