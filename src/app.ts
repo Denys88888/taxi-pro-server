@@ -6,6 +6,7 @@ import path from 'path';
 import { env } from './config/env';
 import { isFirebaseEnabled } from './config/firebase';
 import { storeKind } from './models';
+import { isSentryEnabled } from './utils/sentry';
 import { corsMiddleware } from './middleware/cors';
 import { apiLimiter } from './middleware/rateLimit';
 import { notFound, errorHandler } from './middleware/errorHandler';
@@ -171,6 +172,9 @@ export function createApp(): Express {
       // seed: this is the one fact needed to answer "will drivers get paid?"
       // without shell access to the host.
       wallet: !!env.PI_WALLET_SEED,
+      // Whether errors reach Sentry. Same reasoning as `wallet`: a monitor that
+      // silently is not there looks exactly like one with nothing to report.
+      sentry: isSentryEnabled(),
       ...(commit ? { commit } : {}),
       time: new Date().toISOString(),
     });

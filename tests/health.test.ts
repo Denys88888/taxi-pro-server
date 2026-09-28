@@ -26,6 +26,14 @@ describe('GET /api/health', () => {
     expect(typeof res.body.wallet).toBe('boolean');
   });
 
+  // Error reporting that silently isn't there looks exactly like having
+  // nothing to report. The DSN lives in render.yaml; only this says whether
+  // it actually took.
+  it('reports whether error reporting is on, as a boolean', async () => {
+    const res = await request(app).get('/api/health');
+    expect(typeof res.body.sentry).toBe('boolean');
+  });
+
   // The only way to tell from outside whether a push reached the running
   // service: a deploy that failed to build leaves the old instance answering
   // 200, so 'ok' alone proves nothing about which code is live.

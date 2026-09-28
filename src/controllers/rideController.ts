@@ -21,6 +21,7 @@ import { transitionRide, type DriverStatus } from '../services/rideTransition';
 import { acceptRide } from '../services/rideAccept';
 import { findOutstandingFee } from '../services/cancellationFee';
 import type { Ride, GeoPoint, VehicleType, RideStatus, RideParty, Role } from '../types';
+import { logger } from '../utils/logger';
 
 // POST /api/rides — create a ride request (server computes distance + fare).
 // Supports multi-stop, scheduled (future dispatch) and negotiable (inDriver) rides.
@@ -568,6 +569,14 @@ export async function cancelRide(req: Request, res: Response): Promise<void> {
   };
   sendToUser(ride.passengerId, payload);
   if (ride.driverId) sendToUser(ride.driverId, payload);
+  // `ride` is the record as loaded, so status here is where it stood when it
+  // was cancelled — "while searching" and "mid-trip" are different stories.
+  logger.info('[Ride] cancelled', {
+    rideId: ride.id,
+    by: cancellerRole,
+    from: ride.status,
+    ...(cancellationFee > 0 ? { fee: cancellationFee } : {}),
+  });
   res.json(updated);
 }
 

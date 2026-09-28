@@ -3,6 +3,7 @@ import { pushToUser } from './fcmService';
 import { sendToUser, broadcast } from '../websocket/broadcast';
 import { isApprovedDriver } from '../utils/helpers';
 import type { Ride, User } from '../types';
+import { logger } from '../utils/logger';
 
 export type AcceptFailure =
   | 'TAKEN'
@@ -51,7 +52,21 @@ function publicDriver(driver: User): Record<string, unknown> {
  * difference between a driver whose request timed out being able to press again
  * and being told the ride was taken — by themselves.
  */
+// Every outcome, in one line, from one place. The function below returns from
+// nine points, and taking a ride left no trace at all — not who got it, not
+// who lost the race for it, not who was refused and why.
 export async function acceptRide(uid: string, rideId: string): Promise<AcceptResult> {
+  const result = await tryAcceptRide(uid, rideId);
+  if (result.ok) {
+    // changed=false is the driver who already has it asking again; not news.
+    if (result.changed) logger.info('[Ride] accepted', { rideId, driverId: uid });
+  } else {
+    logger.info('[Ride] accept refused', { rideId, driverId: uid, code: result.code });
+  }
+  return result;
+}
+
+async function tryAcceptRide(uid: string, rideId: string): Promise<AcceptResult> {
   const driver = await store().getUser(uid);
   if (!driver || driver.role !== 'driver' || !driver.driverInfo) {
     return { ok: false, code: 'NOT_DRIVER', message: 'Not a registered driver' };

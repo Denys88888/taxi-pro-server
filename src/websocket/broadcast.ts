@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import type { Role, VehicleType, GeoPoint } from '../types';
+import { logger } from '../utils/logger';
 
 // A WebSocket annotated with the authenticated identity and per-connection state.
 export interface AuthedSocket extends WebSocket {
@@ -135,6 +136,21 @@ export function broadcastToDriversOfType(
     ws.send(msg);
     offered.push(uid);
   }
+  // One line per dispatch, whichever path sent it — a new ride, the socket
+  // request, the scheduler widening its radius. How many drivers it reached is
+  // the number that explains a passenger left on "searching": zero means nobody
+  // was eligible (off shift, wrong class, out of range, already offered), and
+  // until now that was invisible. A warning, so those are one search away.
+  const rideId = (payload as { ride?: { id?: string } } | null)?.ride?.id;
+  const entry = {
+    rideId,
+    vehicleType,
+    radiusKm,
+    reached: offered.length,
+    ...(excludeUids?.size ? { excluded: excludeUids.size } : {}),
+  };
+  if (offered.length === 0) logger.warn('[Dispatch] reached no drivers', entry);
+  else logger.info('[Dispatch] offered', entry);
   return offered;
 }
 
