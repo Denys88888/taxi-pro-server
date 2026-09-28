@@ -25,6 +25,9 @@ export interface AuthedSocket extends WebSocket {
   // True between driver_online and driver_offline — marks a socket the
   // auto-offline heartbeat should watch for GPS silence.
   driverOnline?: boolean;
+  // Set just before the heartbeat terminates a socket that stopped answering
+  // pings, so the close log can tell our cut from the phone dropping off.
+  terminatedByHeartbeat?: boolean;
 }
 
 // Live connection registries (transient, per-process).

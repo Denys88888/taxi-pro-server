@@ -127,10 +127,24 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
       }
     });
 
-    ws.on('close', () => {
+    const connectedAt = Date.now();
+    ws.on('close', (code: number, reason: Buffer) => {
       forgetDriverLocation(payload.uid);
       unregisterSocket(payload.uid, ws);
-      logger.info('[WS] disconnected', { uid: payload.uid });
+      // Why, not just that. "disconnected" alone is what this said through a
+      // run of sockets dropping seconds after opening, and without the code
+      // every cause reads the same: 1006 is the other end vanishing (network
+      // gone, app killed), 1001 a page going away, 1000/1005 the app closing on
+      // purpose (new token, reconnect on wake). byHeartbeat is the only one
+      // that was us — and with HEARTBEAT_MS at 30s it cannot explain anything
+      // shorter than that, which is worth knowing when reading connectedMs.
+      logger.info('[WS] disconnected', {
+        uid: payload.uid,
+        code,
+        reason: reason?.toString().slice(0, 60) || undefined,
+        connectedMs: Date.now() - connectedAt,
+        byHeartbeat: ws.terminatedByHeartbeat === true || undefined,
+      });
     });
 
     ws.on('error', (err) => {
@@ -170,6 +184,7 @@ export function initWebSocket(httpServer: HttpServer): WebSocketServer {
         logger.info('[WS] auto-offline (GPS silent)', { uid: ws.userId });
       }
       if (ws.isAlive === false) {
+        ws.terminatedByHeartbeat = true;
         ws.terminate();
         continue;
       }
