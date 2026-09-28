@@ -496,6 +496,30 @@ export async function payoutDriver(ride: Ride, kind: PayoutKind, amount: number)
   }
 }
 
+// The driver hears about their money when it actually moves, not before. They
+// used to be told "you earned X" the moment the passenger paid — before any
+// payout was even attempted — and then nothing at all, including when the
+// payout failed. So a driver could be congratulated on money that never
+// reached them, and learn otherwise only by checking their wallet.
+//
+// Only outcomes are announced. The duplicate and in-flight guards below stay
+// silent: they mean another attempt is already handling it, and that attempt
+// will speak for itself.
+function tellDriverAboutPayout(
+  ride: Ride,
+  kind: PayoutKind,
+  amount: number,
+  outcome: 'sent' | 'delayed'
+): void {
+  if (!ride.driverId) return;
+  sendToUser(ride.driverId, {
+    type: 'ride_status_update',
+    rideId: ride.id,
+    status: outcome === 'sent' ? 'payout_sent' : 'payout_delayed',
+    data: { amount, kind },
+  });
+}
+
 async function runPayout(ride: Ride, kind: PayoutKind, amount: number): Promise<void> {
   if (!ride.driverId || amount <= 0) return;
   const statusField = PAYOUT_FIELDS[kind].status;
@@ -515,6 +539,7 @@ async function runPayout(ride: Ride, kind: PayoutKind, amount: number): Promise<
     logger.warn('[Payout] PI_WALLET_SEED not set — ride queued for manual payout', {
       rideId: ride.id, driverId: ride.driverId, kind, amount,
     });
+    tellDriverAboutPayout(ride, kind, amount, 'delayed');
     return;
   }
   // Synchronously claim this (rideId, kind) before any await — two concurrent
@@ -555,6 +580,7 @@ async function runPayout(ride: Ride, kind: PayoutKind, amount: number): Promise<
       );
       await store().updateRide(ride.id, { [statusField]: 'completed', [txidField]: txid });
       logger.info('[Payout] driver paid', { rideId: ride.id, driverId: ride.driverId, kind, amount, txid });
+      tellDriverAboutPayout(ride, kind, amount, 'sent');
     } catch (err) {
       const txidFromPartialFailure = (err as { txid?: string }).txid;
       const piPaymentIdFromFailure = (err as { piPaymentId?: string }).piPaymentId;
@@ -578,6 +604,10 @@ async function runPayout(ride: Ride, kind: PayoutKind, amount: number): Promise<
         amount,
         error: (err as Error).message,
       });
+      // Settled-but-unconfirmed is money in the driver's wallet, so it is
+      // "sent" to them whatever Pi's bookkeeping says — the same call the
+      // status above makes.
+      tellDriverAboutPayout(ride, kind, amount, txidFromPartialFailure ? 'sent' : 'delayed');
     }
   } finally {
     payoutsInFlight.delete(claimKey);
