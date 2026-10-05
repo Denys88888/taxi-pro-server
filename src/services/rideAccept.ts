@@ -25,11 +25,12 @@ export type AcceptResult =
 // write in the store.
 const accepting = new Set<string>();
 
+// The passenger's view of their driver. No phone number, for the same reason
+// as partyFromUser in rideController: calls are in-app.
 function publicDriver(driver: User): Record<string, unknown> {
   return {
     uid: driver.uid,
     name: driver.name,
-    phone: driver.phone,
     rating: driver.rating,
     vehicleType: driver.driverInfo?.vehicleType,
     brand: driver.driverInfo?.brand,

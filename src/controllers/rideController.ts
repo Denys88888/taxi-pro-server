@@ -285,10 +285,12 @@ export async function getHeatmap(_req: Request, res: Response): Promise<void> {
 async function partyFromUser(uid: string): Promise<RideParty | null> {
   const u = await store().getUser(uid);
   if (!u) return null;
+  // No phone number. Calls go through the app (WebRTC), and the screen only
+  // ever showed its last four digits — yet the full number sat in every ride
+  // response, readable by the other side of a ride with a stranger.
   return {
     uid: u.uid,
     name: u.name,
-    phone: u.phone,
     rating: u.rating,
     avatar: u.avatar,
     vehicleType: u.driverInfo?.vehicleType,
@@ -325,9 +327,9 @@ export async function getRide(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  // Attach the counterpart's contact card once the relationship is established:
-  // the passenger sees the driver after assignment; the driver sees the
-  // passenger after accepting. Phone numbers are only shared at that point.
+  // Attach the counterpart's card once the relationship is established: the
+  // passenger sees the driver after assignment; the driver sees the passenger
+  // after accepting. Phone numbers are never part of it — see partyFromUser.
   const assigned = ['assigned', 'arrived', 'in_progress', 'completed'].includes(ride.status);
   let driver: RideParty | null = null;
   let passenger: RideParty | null = null;

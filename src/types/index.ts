@@ -195,7 +195,6 @@ export interface Ride {
 export interface RideParty {
   uid: string;
   name: string;
-  phone?: string;
   rating: number;
   avatar?: string;
   vehicleType?: VehicleType;

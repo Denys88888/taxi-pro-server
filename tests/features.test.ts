@@ -182,8 +182,11 @@ describe('fare negotiation (inDriver)', () => {
   });
 });
 
-describe('phone visibility on assigned ride', () => {
-  it('exposes the driver contact card once assigned', async () => {
+// This used to assert the phone number appeared once assigned. Calls moved
+// into the app, and the number stopped being shared at all — see
+// partyPhonePrivacy.test.ts. What still holds is when the card appears.
+describe('driver card on assigned ride', () => {
+  it('shows the driver card once assigned, without a phone number', async () => {
     await seedUser({ uid: 'pv-driver', role: 'driver', name: 'Drew', phone: '+15559990000' });
     await seedUser({ uid: 'pv-pass', role: 'passenger', phone: '+15551110000' });
     const created = await request(app)
@@ -194,10 +197,11 @@ describe('phone visibility on assigned ride', () => {
     // Before assignment: no driver party.
     const before = await request(app).get(`/api/rides/${rideId}`).set(authFor('pv-pass'));
     expect(before.body.driver).toBeNull();
-    // Assign, then the passenger should see the driver's phone.
+    // Assign, then the passenger sees who is coming, but not their number.
     await store().updateRide(rideId, { status: 'assigned', driverId: 'pv-driver' });
     const after = await request(app).get(`/api/rides/${rideId}`).set(authFor('pv-pass'));
-    expect(after.body.driver?.phone).toBe('+15559990000');
+    expect(after.body.driver?.name).toBe('Drew');
+    expect(after.body.driver?.phone).toBeUndefined();
   });
 });
 
