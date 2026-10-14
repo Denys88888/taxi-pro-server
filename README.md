@@ -4,13 +4,6 @@ Pi Network ride-hailing backend: Express REST API + WebSocket real-time layer,
 Firebase Firestore persistence with an in-memory graceful fallback, JWT auth,
 and Pi Platform payment forwarding.
 
-## ⚠️ Security notice (action required)
-
-A previous version of this repo contained a **hardcoded `PI_API_KEY`** in
-`index.js`. That value is now removed from the code, but **it still exists in the
-git history and must be treated as compromised**. Rotate it in the Pi Developer
-Portal and set the new value only via the `PI_API_KEY` environment variable.
-
 ## Tech stack
 
 - Node.js 20, TypeScript 5.5 (strict)
